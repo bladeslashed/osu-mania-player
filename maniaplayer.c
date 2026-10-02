@@ -1,0 +1,628 @@
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+
+#define MAX_LANES 16
+#define CONFIG_FILE "settings.json"
+#define SCREENSHOT_FILE "Screenshot.bmp"
+
+typedef struct {
+    char name[32];
+    int x;
+    char key_str[16];
+    WORD vk;
+    int threshold;
+    bool is_pressed;
+} Lane;
+
+typedef struct {
+    int bbox_left;
+    int bbox_top;
+    int bbox_right;
+    int bbox_bottom;
+    int judgement_line;
+    int global_threshold;
+    char input_mode[16]; // "hold" or "tap"
+    Lane lanes[MAX_LANES];
+    int lane_count;
+} AppConfig;
+
+typedef struct {
+    HDC hScreenDC;
+    HDC hMemDC;
+    HBITMAP hBitmap;
+    HBITMAP hOldBitmap;
+    void* pBits;
+    int width;
+    int height;
+} CaptureContext;
+
+// Global state
+static AppConfig g_config;
+static bool g_is_running = false;
+static bool g_program_active = true;
+
+// Helper to convert character / string to Virtual Key code
+WORD resolve_vk(const char* key_str) {
+    if (!key_str || strlen(key_str) == 0) return 0;
+    if (_stricmp(key_str, "space") == 0) return VK_SPACE;
+    if (_stricmp(key_str, "left") == 0) return VK_LEFT;
+    if (_stricmp(key_str, "right") == 0) return VK_RIGHT;
+    if (_stricmp(key_str, "up") == 0) return VK_UP;
+    if (_stricmp(key_str, "down") == 0) return VK_DOWN;
+    if (_stricmp(key_str, "shift") == 0) return VK_SHIFT;
+    if (_stricmp(key_str, "ctrl") == 0) return VK_CONTROL;
+    if (_stricmp(key_str, "enter") == 0) return VK_RETURN;
+    if (_stricmp(key_str, "tab") == 0) return VK_TAB;
+
+    SHORT res = VkKeyScanA(key_str[0]);
+    if (res == -1) return (WORD)key_str[0];
+    return LOBYTE(res);
+}
+
+void set_default_config(AppConfig* cfg) {
+    cfg->bbox_left = 644;
+    cfg->bbox_top = 760;
+    cfg->bbox_right = 1269;
+    cfg->bbox_bottom = 761;
+    cfg->judgement_line = 0;
+    cfg->global_threshold = 30;
+    strcpy(cfg->input_mode, "hold");
+
+    cfg->lane_count = 4;
+    strcpy(cfg->lanes[0].name, "Lane 1");
+    cfg->lanes[0].x = 10;
+    strcpy(cfg->lanes[0].key_str, "q");
+    cfg->lanes[0].vk = resolve_vk("q");
+    cfg->lanes[0].threshold = 30;
+    cfg->lanes[0].is_pressed = false;
+
+    strcpy(cfg->lanes[1].name, "Lane 2");
+    cfg->lanes[1].x = 180;
+    strcpy(cfg->lanes[1].key_str, "w");
+    cfg->lanes[1].vk = resolve_vk("w");
+    cfg->lanes[1].threshold = 30;
+    cfg->lanes[1].is_pressed = false;
+
+    strcpy(cfg->lanes[2].name, "Lane 3");
+    cfg->lanes[2].x = 340;
+    strcpy(cfg->lanes[2].key_str, "[");
+    cfg->lanes[2].vk = resolve_vk("[");
+    cfg->lanes[2].threshold = 30;
+    cfg->lanes[2].is_pressed = false;
+
+    strcpy(cfg->lanes[3].name, "Lane 4");
+    cfg->lanes[3].x = 500;
+    strcpy(cfg->lanes[3].key_str, "]");
+    cfg->lanes[3].vk = resolve_vk("]");
+    cfg->lanes[3].threshold = 30;
+    cfg->lanes[3].is_pressed = false;
+}
+
+// Simple JSON config loader
+bool load_config_file(AppConfig* cfg, const char* filename) {
+    FILE* f = fopen(filename, "r");
+    if (!f) return false;
+
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (len <= 0) { fclose(f); return false; }
+    char* buf = (char*)malloc(len + 1);
+    if (!buf) { fclose(f); return false; }
+    fread(buf, 1, len, f);
+    buf[len] = '\0';
+    fclose(f);
+
+    // Parse bbox: [644, 760, 1269, 761]
+    char* pBbox = strstr(buf, "\"bbox\"");
+    if (pBbox) {
+        int l, t, r, b;
+        if (sscanf(pBbox, "\"bbox\": [%d, %d, %d, %d]", &l, &t, &r, &b) == 4 ||
+            sscanf(pBbox, "\"bbox\":[%d,%d,%d,%d]", &l, &t, &r, &b) == 4 ||
+            sscanf(pBbox, "\"bbox\": [ %d , %d , %d , %d ]", &l, &t, &r, &b) == 4) {
+            cfg->bbox_left = l;
+            cfg->bbox_top = t;
+            cfg->bbox_right = r;
+            cfg->bbox_bottom = b;
+        }
+    }
+
+    char* pThresh = strstr(buf, "\"global_threshold\"");
+    if (pThresh) {
+        int val = 0;
+        if (sscanf(pThresh, "\"global_threshold\": %d", &val) == 1 ||
+            sscanf(pThresh, "\"global_threshold\":%d", &val) == 1) {
+            cfg->global_threshold = val;
+        }
+    }
+
+    char* pMode = strstr(buf, "\"input_mode\"");
+    if (pMode) {
+        char m[16] = {0};
+        if (sscanf(pMode, "\"input_mode\": \"%15[^\"]\"", m) == 1) {
+            strcpy(cfg->input_mode, m);
+        }
+    }
+
+    // Parse lanes
+    char* pLanes = strstr(buf, "\"lanes\"");
+    if (pLanes) {
+        cfg->lane_count = 0;
+        char* cur = pLanes;
+        while ((cur = strchr(cur, '{')) != NULL && cfg->lane_count < MAX_LANES) {
+            char* end = strchr(cur, '}');
+            if (!end) break;
+
+            int lane_x = 0;
+            int lane_th = cfg->global_threshold;
+            char lane_key[16] = "";
+            char lane_name[32] = "";
+
+            char* px = strstr(cur, "\"x\"");
+            if (px && px < end) sscanf(px, "\"x\": %d", &lane_x);
+
+            char* pk = strstr(cur, "\"key\"");
+            if (pk && pk < end) sscanf(pk, "\"key\": \"%15[^\"]\"", lane_key);
+
+            char* pn = strstr(cur, "\"name\"");
+            if (pn && pn < end) sscanf(pn, "\"name\": \"%31[^\"]\"", lane_name);
+
+            char* pt = strstr(cur, "\"threshold\"");
+            if (pt && pt < end) sscanf(pt, "\"threshold\": %d", &lane_th);
+
+            if (strlen(lane_key) > 0) {
+                int i = cfg->lane_count;
+                if (strlen(lane_name) > 0) strcpy(cfg->lanes[i].name, lane_name);
+                else sprintf(cfg->lanes[i].name, "Lane %d", i + 1);
+
+                cfg->lanes[i].x = lane_x;
+                strcpy(cfg->lanes[i].key_str, lane_key);
+                cfg->lanes[i].vk = resolve_vk(lane_key);
+                cfg->lanes[i].threshold = lane_th;
+                cfg->lanes[i].is_pressed = false;
+                cfg->lane_count++;
+            }
+            cur = end + 1;
+        }
+    }
+
+    free(buf);
+    return true;
+}
+
+bool save_config_file(const AppConfig* cfg, const char* filename) {
+    FILE* f = fopen(filename, "w");
+    if (!f) return false;
+
+    fprintf(f, "{\n");
+    fprintf(f, "  \"bbox\": [%d, %d, %d, %d],\n", cfg->bbox_left, cfg->bbox_top, cfg->bbox_right, cfg->bbox_bottom);
+    fprintf(f, "  \"judgement_line\": %d,\n", cfg->judgement_line);
+    fprintf(f, "  \"global_threshold\": %d,\n", cfg->global_threshold);
+    fprintf(f, "  \"input_mode\": \"%s\",\n", cfg->input_mode);
+    fprintf(f, "  \"lanes\": [\n");
+    for (int i = 0; i < cfg->lane_count; i++) {
+        fprintf(f, "    {\"name\": \"%s\", \"x\": %d, \"key\": \"%s\", \"threshold\": %d}%s\n",
+            cfg->lanes[i].name,
+            cfg->lanes[i].x,
+            cfg->lanes[i].key_str,
+            cfg->lanes[i].threshold,
+            (i == cfg->lane_count - 1) ? "" : ",");
+    }
+    fprintf(f, "  ]\n");
+    fprintf(f, "}\n");
+    fclose(f);
+    return true;
+}
+
+// Low-level fast keyboard input via SendInput
+static inline void send_key_event(WORD vk, bool down) {
+    INPUT input;
+    ZeroMemory(&input, sizeof(INPUT));
+    input.type = INPUT_KEYBOARD;
+    input.ki.wVk = vk;
+    input.ki.dwFlags = down ? 0 : KEYEVENTF_KEYUP;
+    SendInput(1, &input, sizeof(INPUT));
+}
+
+void release_all_keys(AppConfig* cfg) {
+    for (int i = 0; i < cfg->lane_count; i++) {
+        if (cfg->lanes[i].is_pressed) {
+            send_key_event(cfg->lanes[i].vk, false);
+            cfg->lanes[i].is_pressed = false;
+        }
+    }
+}
+
+// Ultra-fast GDI Capture with 32-bit DIBSection
+bool init_capture(CaptureContext* ctx, int left, int top, int right, int bottom) {
+    ctx->width = right - left;
+    ctx->height = bottom - top;
+    if (ctx->width <= 0) ctx->width = 1;
+    if (ctx->height <= 0) ctx->height = 1;
+
+    ctx->hScreenDC = GetDC(NULL);
+    if (!ctx->hScreenDC) return false;
+
+    ctx->hMemDC = CreateCompatibleDC(ctx->hScreenDC);
+    if (!ctx->hMemDC) {
+        ReleaseDC(NULL, ctx->hScreenDC);
+        return false;
+    }
+
+    BITMAPINFO bmi;
+    ZeroMemory(&bmi, sizeof(BITMAPINFO));
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = ctx->width;
+    bmi.bmiHeader.biHeight = -ctx->height; // Negative for top-down DIB layout
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    ctx->hBitmap = CreateDIBSection(ctx->hMemDC, &bmi, DIB_RGB_COLORS, &ctx->pBits, NULL, 0);
+    if (!ctx->hBitmap || !ctx->pBits) {
+        DeleteDC(ctx->hMemDC);
+        ReleaseDC(NULL, ctx->hScreenDC);
+        return false;
+    }
+
+    ctx->hOldBitmap = (HBITMAP)SelectObject(ctx->hMemDC, ctx->hBitmap);
+    return true;
+}
+
+void cleanup_capture(CaptureContext* ctx) {
+    if (ctx->hMemDC && ctx->hOldBitmap) {
+        SelectObject(ctx->hMemDC, ctx->hOldBitmap);
+    }
+    if (ctx->hBitmap) DeleteObject(ctx->hBitmap);
+    if (ctx->hMemDC) DeleteDC(ctx->hMemDC);
+    if (ctx->hScreenDC) ReleaseDC(NULL, ctx->hScreenDC);
+}
+
+// Save captured buffer to BMP image
+void save_screenshot_bmp(const CaptureContext* ctx, const char* filename) {
+    FILE* f = fopen(filename, "wb");
+    if (!f) {
+        printf("[Screenshot Error] Could not write to %s\n", filename);
+        return;
+    }
+
+    int row_bytes = ctx->width * 4;
+    int image_size = row_bytes * ctx->height;
+
+    BITMAPFILEHEADER bfh;
+    ZeroMemory(&bfh, sizeof(BITMAPFILEHEADER));
+    bfh.bfType = 0x4D42; // "BM"
+    bfh.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+    bfh.bfSize = bfh.bfOffBits + image_size;
+
+    BITMAPINFOHEADER bih;
+    ZeroMemory(&bih, sizeof(BITMAPINFOHEADER));
+    bih.biSize = sizeof(BITMAPINFOHEADER);
+    bih.biWidth = ctx->width;
+    bih.biHeight = -ctx->height; // top-down
+    bih.biPlanes = 1;
+    bih.biBitCount = 32;
+    bih.biCompression = BI_RGB;
+    bih.biSizeImage = image_size;
+
+    fwrite(&bfh, sizeof(BITMAPFILEHEADER), 1, f);
+    fwrite(&bih, sizeof(BITMAPINFOHEADER), 1, f);
+    fwrite(ctx->pBits, 1, image_size, f);
+    fclose(f);
+    printf("[Screenshot] Saved detection strip to %s (%dx%d px)\n", filename, ctx->width, ctx->height);
+}
+
+// Interactive Console Menu
+void print_menu(const AppConfig* cfg) {
+    printf("\n=================================================================\n");
+    printf("         MANIA PLAYER - C NATIVE HIGH-PERFORMANCE ENGINE\n");
+    printf("=================================================================\n");
+    printf("  BBox Detection:   (%d, %d, %d, %d) [Width: %d, Height: %d]\n",
+        cfg->bbox_left, cfg->bbox_top, cfg->bbox_right, cfg->bbox_bottom,
+        cfg->bbox_right - cfg->bbox_left, cfg->bbox_bottom - cfg->bbox_top);
+    printf("  Judgement Line:   Y = %d\n", cfg->judgement_line);
+    printf("  Input Mode:       %s\n", _stricmp(cfg->input_mode, "hold") == 0 ? "HOLD (Default)" : "TAP");
+    printf("  Lanes (%d):\n", cfg->lane_count);
+    for (int i = 0; i < cfg->lane_count; i++) {
+        printf("    [%d] %-8s -> X: %-4d | Key: '%-5s' | Thresh: %d\n",
+            i + 1, cfg->lanes[i].name, cfg->lanes[i].x, cfg->lanes[i].key_str, cfg->lanes[i].threshold);
+    }
+    printf("=================================================================\n");
+    printf("  [Enter] / [1] Start Mania Player\n");
+    printf("  [2] Configure Lanes (Add, Edit, Remove)\n");
+    printf("  [3] Edit Detection BBox\n");
+    printf("  [4] Change Global Threshold\n");
+    printf("  [5] Toggle Input Mode (Hold vs Tap)\n");
+    printf("  [6] Reset to Default WhiteCat 23-Speed Preset\n");
+    printf("  [7] Save Configuration to %s\n", CONFIG_FILE);
+    printf("  [8] Exit\n");
+    printf("=================================================================\n");
+    printf("Select option (or press Enter to start): ");
+}
+
+void configure_lanes_menu(AppConfig* cfg) {
+    char line[128];
+    while (true) {
+        printf("\n--- LANE CONFIGURATION ---\n");
+        for (int i = 0; i < cfg->lane_count; i++) {
+            printf("  [%d] %-8s: X=%-4d Key='%s' Thresh=%d\n",
+                i + 1, cfg->lanes[i].name, cfg->lanes[i].x, cfg->lanes[i].key_str, cfg->lanes[i].threshold);
+        }
+        printf("  [A] Add new lane\n");
+        printf("  [D] Delete a lane\n");
+        printf("  [B] Back to main menu\n");
+        printf("Choice: ");
+
+        if (!fgets(line, sizeof(line), stdin)) break;
+        if (line[0] == 'b' || line[0] == 'B' || line[0] == '\n') break;
+
+        if (line[0] == 'a' || line[0] == 'A') {
+            if (cfg->lane_count >= MAX_LANES) {
+                printf("[Error] Max lane limit reached (%d).\n", MAX_LANES);
+                continue;
+            }
+            int idx = cfg->lane_count;
+            printf("Lane name: ");
+            if (fgets(cfg->lanes[idx].name, sizeof(cfg->lanes[idx].name), stdin)) {
+                cfg->lanes[idx].name[strcspn(cfg->lanes[idx].name, "\r\n")] = 0;
+            }
+            if (strlen(cfg->lanes[idx].name) == 0) sprintf(cfg->lanes[idx].name, "Lane %d", idx + 1);
+
+            printf("X offset in judgement box: ");
+            int x = 0;
+            if (scanf("%d", &x) == 1) cfg->lanes[idx].x = x;
+            while (getchar() != '\n'); // flush
+
+            printf("Key (e.g. q, w, space, left, up): ");
+            if (fgets(cfg->lanes[idx].key_str, sizeof(cfg->lanes[idx].key_str), stdin)) {
+                cfg->lanes[idx].key_str[strcspn(cfg->lanes[idx].key_str, "\r\n")] = 0;
+            }
+            cfg->lanes[idx].vk = resolve_vk(cfg->lanes[idx].key_str);
+            cfg->lanes[idx].threshold = cfg->global_threshold;
+            cfg->lanes[idx].is_pressed = false;
+            cfg->lane_count++;
+            printf("[Added] %s (X=%d, Key='%s')\n", cfg->lanes[idx].name, cfg->lanes[idx].x, cfg->lanes[idx].key_str);
+        } else if (line[0] == 'd' || line[0] == 'D') {
+            printf("Enter lane number to delete (1-%d): ", cfg->lane_count);
+            int del_idx = 0;
+            if (scanf("%d", &del_idx) == 1 && del_idx >= 1 && del_idx <= cfg->lane_count) {
+                del_idx--;
+                for (int i = del_idx; i < cfg->lane_count - 1; i++) {
+                    cfg->lanes[i] = cfg->lanes[i + 1];
+                }
+                cfg->lane_count--;
+                printf("[Deleted] Lane successfully removed.\n");
+            }
+            while (getchar() != '\n');
+        } else if (atoi(line) >= 1 && atoi(line) <= cfg->lane_count) {
+            int idx = atoi(line) - 1;
+            printf("Editing %s:\n", cfg->lanes[idx].name);
+            printf("New X offset [%d]: ", cfg->lanes[idx].x);
+            char temp[64];
+            if (fgets(temp, sizeof(temp), stdin) && temp[0] != '\n') {
+                cfg->lanes[idx].x = atoi(temp);
+            }
+            printf("New Key [%s]: ", cfg->lanes[idx].key_str);
+            if (fgets(temp, sizeof(temp), stdin) && temp[0] != '\n') {
+                temp[strcspn(temp, "\r\n")] = 0;
+                strcpy(cfg->lanes[idx].key_str, temp);
+                cfg->lanes[idx].vk = resolve_vk(temp);
+            }
+            printf("Custom Threshold [%d]: ", cfg->lanes[idx].threshold);
+            if (fgets(temp, sizeof(temp), stdin) && temp[0] != '\n') {
+                cfg->lanes[idx].threshold = atoi(temp);
+            }
+            printf("[Updated] %s: X=%d Key='%s' Thresh=%d\n",
+                cfg->lanes[idx].name, cfg->lanes[idx].x, cfg->lanes[idx].key_str, cfg->lanes[idx].threshold);
+        }
+    }
+}
+
+void edit_bbox_menu(AppConfig* cfg) {
+    printf("\nCurrent BBox: (%d, %d, %d, %d)\n",
+        cfg->bbox_left, cfg->bbox_top, cfg->bbox_right, cfg->bbox_bottom);
+    printf("Enter 4 integers: left top right bottom (or press Enter to keep): ");
+    char line[128];
+    if (fgets(line, sizeof(line), stdin) && line[0] != '\n') {
+        int l, t, r, b;
+        if (sscanf(line, "%d %d %d %d", &l, &t, &r, &b) == 4 ||
+            sscanf(line, "%d, %d, %d, %d", &l, &t, &r, &b) == 4) {
+            cfg->bbox_left = l;
+            cfg->bbox_top = t;
+            cfg->bbox_right = r;
+            cfg->bbox_bottom = b;
+            printf("[Updated] BBox set to (%d, %d, %d, %d)\n", l, t, r, b);
+        } else {
+            printf("[Error] Invalid input. Must be 4 integers.\n");
+        }
+    }
+}
+
+// Main high-performance gameplay loop in C
+void run_player(AppConfig* cfg) {
+    CaptureContext ctx;
+    if (!init_capture(&ctx, cfg->bbox_left, cfg->bbox_top, cfg->bbox_right, cfg->bbox_bottom)) {
+        printf("[Fatal Error] Failed to initialize Windows GDI Capture context.\n");
+        return;
+    }
+
+    // Refresh lane virtual keys
+    for (int i = 0; i < cfg->lane_count; i++) {
+        cfg->lanes[i].vk = resolve_vk(cfg->lanes[i].key_str);
+        cfg->lanes[i].is_pressed = false;
+    }
+
+    printf("\n=================================================================\n");
+    printf("         MANIA PLAYER (NATIVE C) - RUNNING\n");
+    printf("  Controls:\n");
+    printf("    [F] Start / Play\n");
+    printf("    [S] Stop / Pause\n");
+    printf("    [D] Save Screenshot (Screenshot.bmp)\n");
+    printf("    [M] Pause & Return to Configuration Menu\n");
+    printf("    [/] Clean Exit\n");
+    printf("=================================================================\n\n");
+
+    LARGE_INTEGER freq, t_start, t_now;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&t_start);
+
+    long long frame_count = 0;
+    bool hold_mode = (_stricmp(cfg->input_mode, "hold") == 0);
+    int line_y = cfg->judgement_line;
+    if (line_y >= ctx.height) line_y = ctx.height - 1;
+    if (line_y < 0) line_y = 0;
+
+    int width = ctx.width;
+    unsigned char* pBits = (unsigned char*)ctx.pBits;
+
+    while (g_program_active) {
+        // Hotkey polling via GetAsyncKeyState
+        if (GetAsyncKeyState('F') & 0x8000) {
+            if (!g_is_running) {
+                printf("\n[>> START] Mania Player active! Monitoring lanes...\n");
+                g_is_running = true;
+            }
+            Sleep(150); // Debounce hotkey
+        }
+        if (GetAsyncKeyState('S') & 0x8000) {
+            if (g_is_running) {
+                printf("\n[|| STOP] Mania Player paused.\n");
+                g_is_running = false;
+                release_all_keys(cfg);
+            }
+            Sleep(150);
+        }
+        if (GetAsyncKeyState('D') & 0x8000) {
+            BitBlt(ctx.hMemDC, 0, 0, ctx.width, ctx.height, ctx.hScreenDC, cfg->bbox_left, cfg->bbox_top, SRCCOPY);
+            save_screenshot_bmp(&ctx, SCREENSHOT_FILE);
+            Sleep(250);
+        }
+        if (GetAsyncKeyState('M') & 0x8000) {
+            printf("\n[Menu] Returning to Configuration Menu...\n");
+            g_is_running = false;
+            release_all_keys(cfg);
+            Sleep(250);
+            break;
+        }
+        if (GetAsyncKeyState(VK_OEM_2) & 0x8000) { // '/' key
+            printf("\n[XX EXIT] Exiting Mania Player...\n");
+            g_is_running = false;
+            g_program_active = false;
+            release_all_keys(cfg);
+            break;
+        }
+
+        if (!g_is_running) {
+            Sleep(10);
+            continue;
+        }
+
+        // 1. Ultra-fast direct memory screen capture
+        BitBlt(ctx.hMemDC, 0, 0, width, ctx.height, ctx.hScreenDC, cfg->bbox_left, cfg->bbox_top, SRCCOPY);
+
+        // 2. Direct memory pixel inspection (offset = (line_y * width + x) * 4)
+        for (int i = 0; i < cfg->lane_count; i++) {
+            int x = cfg->lanes[i].x;
+            if (x < 0 || x >= width) continue;
+
+            int offset = (line_y * width + x) * 4;
+            int b = pBits[offset];
+            int g = pBits[offset + 1];
+            int r = pBits[offset + 2];
+            int brightness = (r + g + b) / 3;
+
+            bool is_active = (brightness > cfg->lanes[i].threshold);
+            bool was_active = cfg->lanes[i].is_pressed;
+
+            if (hold_mode) {
+                if (is_active && !was_active) {
+                    send_key_event(cfg->lanes[i].vk, true);
+                    cfg->lanes[i].is_pressed = true;
+                } else if (!is_active && was_active) {
+                    send_key_event(cfg->lanes[i].vk, false);
+                    cfg->lanes[i].is_pressed = false;
+                }
+            } else { // Tap mode (debounced)
+                if (is_active && !was_active) {
+                    send_key_event(cfg->lanes[i].vk, true);
+                    send_key_event(cfg->lanes[i].vk, false);
+                    cfg->lanes[i].is_pressed = true;
+                } else if (!is_active && was_active) {
+                    cfg->lanes[i].is_pressed = false;
+                }
+            }
+        }
+
+        frame_count++;
+
+        // Periodic FPS display
+        QueryPerformanceCounter(&t_now);
+        double elapsed_sec = (double)(t_now.QuadPart - t_start.QuadPart) / (double)freq.QuadPart;
+        if (elapsed_sec >= 2.0) {
+            double fps = (double)frame_count / elapsed_sec;
+            double latency_ms = (elapsed_sec / (double)frame_count) * 1000.0;
+            printf("\r[Native C Active] FPS: %6.1f | Frame Latency: %5.2f ms | Lanes: %d", fps, latency_ms, cfg->lane_count);
+            fflush(stdout);
+            frame_count = 0;
+            t_start = t_now;
+        }
+    }
+
+    release_all_keys(cfg);
+    cleanup_capture(&ctx);
+}
+
+int main() {
+    set_default_config(&g_config);
+    if (!load_config_file(&g_config, CONFIG_FILE)) {
+        save_config_file(&g_config, CONFIG_FILE);
+    }
+
+    char line[64];
+    while (g_program_active) {
+        print_menu(&g_config);
+        if (!fgets(line, sizeof(line), stdin)) break;
+
+        char choice = line[0];
+        if (choice == '\n' || choice == '1') {
+            save_config_file(&g_config, CONFIG_FILE);
+            run_player(&g_config);
+        } else if (choice == '2') {
+            configure_lanes_menu(&g_config);
+        } else if (choice == '3') {
+            edit_bbox_menu(&g_config);
+        } else if (choice == '4') {
+            printf("Enter global threshold 0-255 [%d]: ", g_config.global_threshold);
+            if (fgets(line, sizeof(line), stdin) && line[0] != '\n') {
+                g_config.global_threshold = atoi(line);
+                printf("[Updated] Global threshold set to %d\n", g_config.global_threshold);
+            }
+        } else if (choice == '5') {
+            if (_stricmp(g_config.input_mode, "hold") == 0) {
+                strcpy(g_config.input_mode, "tap");
+            } else {
+                strcpy(g_config.input_mode, "hold");
+            }
+            printf("[Updated] Mode toggled to: %s\n", g_config.input_mode);
+        } else if (choice == '6') {
+            set_default_config(&g_config);
+            save_config_file(&g_config, CONFIG_FILE);
+            printf("[Reset] Restored default WhiteCat 23-speed preset.\n");
+        } else if (choice == '7') {
+            save_config_file(&g_config, CONFIG_FILE);
+            printf("[Saved] Saved settings to %s\n", CONFIG_FILE);
+        } else if (choice == '8') {
+            printf("\nExiting Mania Player. Goodbye!\n");
+            break;
+        } else {
+            printf("[Invalid] Please choose a valid option.\n");
+        }
+    }
+
+    return 0;
+}
