@@ -1,0 +1,48 @@
+{
+  "preset_name": "WhiteCat Skin 23 Speed (Default)",
+  "bbox": [
+    677,
+    953,
+    1225,
+    954
+  ],
+  "judgement_line": 0,
+  "global_threshold": 30,
+  "lanes": [
+    {
+      "name": "Lane 1",
+      "x": 39,
+      "key": "q",
+      "threshold": 30
+    },
+    {
+      "name": "Lane 2",
+      "x": 215,
+      "key": "w",
+      "threshold": 30
+    },
+    {
+      "name": "Lane 3",
+      "x": 353,
+      "key": "[",
+      "threshold": 30
+    },
+    {
+      "name": "Lane 4",
+      "x": 502,
+      "key": "]",
+      "threshold": 30
+    }
+  ],
+  "input_mode": "hold",
+  "capture_backend": "auto",
+  "show_fps": true,
+  "fps_report_interval": 2.0,
+  "hotkeys": {
+    "start": "f",
+    "stop": "s",
+    "screenshot": "d",
+    "menu": "m",
+    "exit": "/"
+  }
+}

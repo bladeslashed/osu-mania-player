@@ -1,0 +1,12 @@
+{
+  "preset_name": "WhiteCat Skin 23 Speed (ASKL Keys)",
+  "bbox": [677, 953, 1225, 954],
+  "judgement_line": 0,
+  "global_threshold": 30,
+  "lanes": [
+    {"name": "Lane 1", "rel_x": 39, "key": "a", "threshold": 30},
+    {"name": "Lane 2", "rel_x": 215, "key": "s", "threshold": 30},
+    {"name": "Lane 3", "rel_x": 353, "key": "k", "threshold": 30},
+    {"name": "Lane 4", "rel_x": 502, "key": "l", "threshold": 30}
+  ]
+}

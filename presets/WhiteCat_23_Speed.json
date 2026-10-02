@@ -1,0 +1,12 @@
+{
+  "preset_name": "WhiteCat Skin 23 Speed (Default QW[])",
+  "bbox": [677, 953, 1225, 954],
+  "judgement_line": 0,
+  "global_threshold": 30,
+  "lanes": [
+    {"name": "Lane 1", "rel_x": 39, "key": "q", "threshold": 30},
+    {"name": "Lane 2", "rel_x": 215, "key": "w", "threshold": 30},
+    {"name": "Lane 3", "rel_x": 353, "key": "[", "threshold": 30},
+    {"name": "Lane 4", "rel_x": 502, "key": "]", "threshold": 30}
+  ]
+}
