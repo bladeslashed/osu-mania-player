@@ -14,7 +14,7 @@ Features:
 - Interactive Lane target point-and-click or drag markers (LANE1..LANE4)
 - Live pixel magnifier (loupe) with RGB & brightness inspector
 - Live BBox preview strip showing note detection preview (> 30 threshold)
-- Direct load/save to maniaplayer.py (with automatic backups) & JSON configs
+- Direct load/save to maniaplayer.py (with automatic backups in 'backups/' folder) & JSON configs
 """
 
 import os
@@ -98,6 +98,7 @@ def find_default_config_file() -> Path:
 DEFAULT_TARGET_FILE = find_default_target_file()
 DEFAULT_CONFIG_FILE = find_default_config_file()
 DEFAULT_SCREENSHOT = ROOT_DIR / "Screenshot.png"
+DEFAULT_BACKUPS_DIR = ROOT_DIR / "backups"
 
 LANE_COLORS = [
     "#38bdf8",  # Lane 1: Cyan / Sky
@@ -157,7 +158,7 @@ ALL_20_KEYS = [
 
 
 class ManiaHarnessApp:
-    def __init__(self, root: tk.Tk, on_save_callback=None, target_file: Path = None, config_file: Path = None, presets_dir: Path = None):
+    def __init__(self, root: tk.Tk, on_save_callback=None, target_file: Path = None, config_file: Path = None, presets_dir: Path = None, backups_dir: Path = None):
         self.root = root
         self.on_save_callback = on_save_callback
 
@@ -189,6 +190,13 @@ class ManiaHarnessApp:
         else:
             self.presets_dir = self.target_file.parent / "presets"
         self.presets_dir.mkdir(parents=True, exist_ok=True)
+
+        # Backups directory (dedicated folder for automatic target backups)
+        if backups_dir is not None:
+            self.backups_dir = Path(backups_dir)
+        else:
+            self.backups_dir = self.target_file.parent / "backups"
+        self.backups_dir.mkdir(parents=True, exist_ok=True)
 
         self.screenshot_path = self.target_file.parent / "Screenshot.png"
 
@@ -411,6 +419,14 @@ class ManiaHarnessApp:
         lbl_path.pack(fill=tk.X)
         lbl_full = tk.Label(file_box, text=str(self.target_file), bg=self.bg_panel, fg=self.fg_dim, font=("Segoe UI", 8), anchor="w")
         lbl_full.pack(fill=tk.X)
+
+        row_fb = tk.Frame(file_box, bg=self.bg_panel)
+        row_fb.pack(fill=tk.X, pady=(4, 2))
+        btn_open_backups = tk.Button(
+            row_fb, text="📁 Backups Folder", bg="#3f3f46", fg="white",
+            font=("Segoe UI", 8), relief="flat", padx=6, pady=1, cursor="hand2", command=self.open_backups_folder
+        )
+        btn_open_backups.pack(side=tk.LEFT)
 
         # Presets Section
         presets_frame = tk.LabelFrame(sidebar, text="Skin / Keybind Presets", bg=self.bg_panel, fg=self.accent, font=("Segoe UI", 9, "bold"), padx=8, pady=6)
@@ -1002,6 +1018,13 @@ class ManiaHarnessApp:
             os.startfile(str(self.presets_dir))
         except Exception as e:
             messagebox.showerror("Error", f"Could not open presets folder:\n{e}")
+
+    def open_backups_folder(self):
+        try:
+            self.backups_dir.mkdir(parents=True, exist_ok=True)
+            os.startfile(str(self.backups_dir))
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not open backups folder:\n{e}")
 
     # -------------------------------------------------------------
     # Keybind Mutation Logic
@@ -1789,15 +1812,17 @@ class ManiaHarnessApp:
             f"JUDGEMENENT_LINE = {self.judgement_line}\n"
             f"LANES ({self.key_count}K) = {self.lane_rel_x[:self.key_count]}\n"
             f"KEYS = {self.lane_keys[:self.key_count]}\n\n"
-            f"A backup will be created automatically. Proceed?"
+            f"A backup will be created in '{self.backups_dir.name}/'. Proceed?"
         )
         if not confirm:
             return
 
         try:
-            # 1. Create backup
+            # 1. Create backup in dedicated backups folder
+            self.backups_dir.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_path = self.target_file.with_name(f"{self.target_file.name}.bak_{timestamp}")
+            backup_name = f"{self.target_file.name}.bak_{timestamp}"
+            backup_path = self.backups_dir / backup_name
             shutil.copy2(self.target_file, backup_path)
 
             # 2. Update lines cleanly in content
@@ -1910,7 +1935,7 @@ class ManiaHarnessApp:
             messagebox.showinfo(
                 "Saved Successfully",
                 f"Successfully updated {self.target_file.name} and Mania Player ({self.key_count} Keys)!\n\n"
-                f"Backup saved to:\n{backup_path.name}"
+                f"Backup saved to:\n{self.backups_dir.name}/{backup_path.name}"
             )
             self.lbl_status.config(text=f"Saved updated calibration to {self.target_file.name}")
         except Exception as e:
