@@ -1,0 +1,25 @@
+# Antigravity / Workspace Changelog (user requested git-ignore)
+changelog/
+
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+
+# PyInstaller / Build artifacts
+build/
+dist/
+*.spec.bak
+
+# Safety backups generated at runtime (keep .gitkeep)
+backups/*.py
+backups/*.json
+!backups/.gitkeep
+
+# Operating system artifacts
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store

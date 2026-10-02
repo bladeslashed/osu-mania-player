@@ -14,7 +14,6 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 # Explicitly import dependencies so PyInstaller packages them into the EXE
-import cv2
 from PIL import Image, ImageTk, ImageGrab
 from pynput.keyboard import Controller, Listener, Key
 
