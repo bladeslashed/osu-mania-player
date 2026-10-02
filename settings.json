@@ -1,12 +1,37 @@
 {
-  "bbox": [677, 953, 1225, 954],
+  "bbox": [
+    677,
+    943,
+    1225,
+    944
+  ],
   "judgement_line": 0,
   "global_threshold": 30,
   "input_mode": "hold",
   "lanes": [
-    {"name": "Lane 1", "x": 39, "key": "q", "threshold": 30},
-    {"name": "Lane 2", "x": 215, "key": "w", "threshold": 30},
-    {"name": "Lane 3", "x": 353, "key": "[", "threshold": 30},
-    {"name": "Lane 4", "x": 502, "key": "]", "threshold": 30}
+    {
+      "name": "Lane 1",
+      "x": 39,
+      "key": "q",
+      "threshold": 30
+    },
+    {
+      "name": "Lane 2",
+      "x": 411,
+      "key": "k",
+      "threshold": 30
+    },
+    {
+      "name": "Lane 3",
+      "x": 456,
+      "key": "k",
+      "threshold": 30
+    },
+    {
+      "name": "Lane 4",
+      "x": 479,
+      "key": "]",
+      "threshold": 30
+    }
   ]
 }

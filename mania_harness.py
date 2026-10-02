@@ -100,10 +100,59 @@ DEFAULT_CONFIG_FILE = find_default_config_file()
 DEFAULT_SCREENSHOT = ROOT_DIR / "Screenshot.png"
 
 LANE_COLORS = [
-    "#38bdf8",  # Lane 1: Cyan / Light Blue
+    "#38bdf8",  # Lane 1: Cyan / Sky
     "#4ade80",  # Lane 2: Bright Green
     "#fb923c",  # Lane 3: Orange
     "#c084fc",  # Lane 4: Purple
+    "#f43f5e",  # Lane 5: Rose
+    "#eab308",  # Lane 6: Yellow
+    "#06b6d4",  # Lane 7: Teal
+    "#a855f7",  # Lane 8: Violet
+    "#ec4899",  # Lane 9: Pink
+    "#10b981",  # Lane 10: Emerald
+    "#3b82f6",  # Lane 11: Blue
+    "#f97316",  # Lane 12: Bright Orange
+    "#84cc16",  # Lane 13: Lime
+    "#14b8a6",  # Lane 14: Dark Teal
+    "#8b5cf6",  # Lane 15: Indigo
+    "#d946ef",  # Lane 16: Magenta
+    "#ef4444",  # Lane 17: Red
+    "#0ea5e9",  # Lane 18: Ocean
+    "#22c55e",  # Lane 19: Pure Green
+    "#f59e0b",  # Lane 20: Amber
+]
+
+
+def get_lane_color(i: int) -> str:
+    return LANE_COLORS[i % len(LANE_COLORS)]
+
+
+DEFAULT_KEY_LAYOUTS = {
+    1: ["space"],
+    2: ["d", "k"],
+    3: ["d", "space", "k"],
+    4: ["q", "w", "[", "]"],
+    5: ["d", "f", "space", "j", "k"],
+    6: ["s", "d", "f", "j", "k", "l"],
+    7: ["s", "d", "f", "space", "j", "k", "l"],
+    8: ["a", "s", "d", "f", "j", "k", "l", ";"],
+    9: ["a", "s", "d", "f", "space", "j", "k", "l", ";"],
+    10: ["a", "s", "d", "f", "g", "h", "j", "k", "l", ";"],
+    11: ["a", "s", "d", "f", "g", "space", "h", "j", "k", "l", ";"],
+    12: ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p", "[", "]"],
+    13: ["q", "w", "e", "r", "t", "y", "space", "u", "i", "o", "p", "[", "]"],
+    14: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "=", "[", "]"],
+    15: ["1", "2", "3", "4", "5", "6", "7", "space", "8", "9", "0", "-", "=", "[", "]"],
+    16: ["1", "2", "3", "4", "5", "6", "7", "8", "q", "w", "e", "r", "u", "i", "o", "p"],
+    17: ["1", "2", "3", "4", "5", "6", "7", "8", "space", "q", "w", "e", "r", "u", "i", "o", "p"],
+    18: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "q", "w", "e", "r", "u", "i", "o", "p", "["],
+    19: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "space", "q", "w", "e", "r", "u", "i", "o", "p", "["],
+    20: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "q", "w", "e", "r", "t", "y", "u", "i", "o", "p"],
+}
+
+ALL_20_KEYS = [
+    "q", "w", "e", "r", "t", "y", "u", "i", "o", "p",
+    "a", "s", "d", "f", "g", "h", "j", "k", "l", ";"
 ]
 
 
@@ -116,10 +165,10 @@ class ManiaHarnessApp:
         self.root.geometry("1320x840")
         self.root.minsize(1080, 690)
 
-        # Make the Mania Harness stay on top by default
-        self.stay_on_top = tk.BooleanVar(value=True)
+        # Mania Harness topmost setting (defaults to False)
+        self.stay_on_top = tk.BooleanVar(value=False)
         try:
-            self.root.attributes("-topmost", True)
+            self.root.attributes("-topmost", False)
         except Exception:
             pass
 
@@ -154,14 +203,14 @@ class ManiaHarnessApp:
         self.bbox_bottom = 954
         self.judgement_line = 0
 
-        # Lane target positions (relative to bbox_left)
+        # Lane target positions (relative to bbox_left) and keybinds (1 to 20 keys)
+        self.key_count = 4
         self.lane_rel_x = [39, 215, 353, 502]
-        # Lane keybinds
         self.lane_keys = ["q", "w", "[", "]"]
 
         # Interaction mode: 'box' or 'lane'
         self.current_mode = "box"
-        self.selected_lane_idx = 0  # 0..3
+        self.selected_lane_idx = 0  # 0..(key_count-1)
 
         # Drag tracking
         self.is_dragging_box = False
@@ -172,11 +221,11 @@ class ManiaHarnessApp:
         self.active_handle = None
         self.active_drag_lane = None
 
-        # Load initial values
-        self.load_from_target_file(silent=True)
-
         self._build_ui()
         self._bind_events()
+
+        # Load initial values after UI elements are constructed
+        self.load_from_target_file(silent=True)
 
         # Try loading an existing screenshot on startup if available
         self._try_load_initial_image()
@@ -471,27 +520,59 @@ class ManiaHarnessApp:
         btn_apply_offset = tk.Button(offset_frame, text="Shift", bg=self.accent, fg="black", font=("Segoe UI", 8, "bold"), relief="flat", padx=5, pady=1, command=self.apply_offset_y)
         btn_apply_offset.pack(side=tk.LEFT, padx=1)
 
-        # 2. Lanes & Keybinds Inspector Frame
+        # 2. Lanes & Keybinds Inspector Frame (Dynamic 1 to 20 Keys)
         lane_frame = tk.LabelFrame(sidebar, text="Lanes & Keybinds", bg=self.bg_panel, fg=self.accent, font=("Segoe UI", 9, "bold"), padx=8, pady=6)
         lane_frame.pack(fill=tk.X, pady=(0, 6))
 
-        # Quick Keybind presets row
-        quick_key_box = tk.Frame(lane_frame, bg=self.bg_panel)
-        quick_key_box.pack(fill=tk.X, pady=(0, 4))
-        tk.Label(quick_key_box, text="Key Sets:", bg=self.bg_panel, fg=self.fg_dim, font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(0, 4))
+        # Dynamic Key count selector row
+        kc_row = tk.Frame(lane_frame, bg=self.bg_panel)
+        kc_row.pack(fill=tk.X, pady=(0, 4))
 
-        quick_sets = [
-            ("QW[]", ["q", "w", "[", "]"]),
-            ("DFJK", ["d", "f", "j", "k"]),
-            ("ASKL", ["a", "s", "k", "l"]),
-            ("ZX./", ["z", "x", ".", "/"]),
-        ]
-        for name, keys in quick_sets:
-            btn_q = tk.Button(
-                quick_key_box, text=name, bg="#3f3f46", fg="white", font=("Consolas", 8),
-                relief="flat", padx=4, pady=1, command=lambda k_list=keys: self.apply_key_preset(k_list)
+        tk.Label(kc_row, text="Keys (1-20):", bg=self.bg_panel, fg=self.fg_main, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 4))
+
+        self.var_key_count = tk.IntVar(value=self.key_count)
+        self.spin_key_count = tk.Spinbox(
+            kc_row, from_=1, to=20, textvariable=self.var_key_count, width=3,
+            bg=self.bg_input, fg=self.accent, font=("Consolas", 9, "bold"), justify="center", relief="flat",
+            command=self._on_key_count_spin_changed
+        )
+        self.spin_key_count.pack(side=tk.LEFT, padx=2)
+        self.spin_key_count.bind("<KeyRelease>", lambda e: self._on_key_count_spin_changed())
+
+        # Quick mode buttons
+        for k_val in (4, 7, 8, 10):
+            btn_k = tk.Button(
+                kc_row, text=f"{k_val}K", bg="#3f3f46", fg="white", font=("Segoe UI", 7, "bold"),
+                relief="flat", padx=3, pady=1, command=lambda kv=k_val: self.set_key_count(kv)
             )
-            btn_q.pack(side=tk.LEFT, padx=2)
+            btn_k.pack(side=tk.LEFT, padx=1)
+
+        btn_auto_space = tk.Button(
+            kc_row, text="↔ Auto-Space", bg="#0284c7", fg="white", font=("Segoe UI", 7, "bold"),
+            relief="flat", padx=4, pady=1, command=self.auto_space_lanes
+        )
+        btn_auto_space.pack(side=tk.RIGHT, padx=1)
+
+        # Quick Keybind presets row
+        self.quick_key_box = tk.Frame(lane_frame, bg=self.bg_panel)
+        self.quick_key_box.pack(fill=tk.X, pady=(0, 4))
+
+        # Scrollable container for lane rows (smoothly handles 1 to 20 keys)
+        scroll_outer = tk.Frame(lane_frame, bg=self.bg_panel)
+        scroll_outer.pack(fill=tk.BOTH, expand=True, pady=2)
+
+        self.lane_canvas = tk.Canvas(scroll_outer, bg=self.bg_panel, height=170, highlightthickness=0)
+        self.lane_scrollbar = tk.Scrollbar(scroll_outer, orient=tk.VERTICAL, command=self.lane_canvas.yview)
+        self.lane_canvas.configure(yscrollcommand=self.lane_scrollbar.set)
+
+        self.lane_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.lane_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.lane_rows_frame = tk.Frame(self.lane_canvas, bg=self.bg_panel)
+        self.lane_canvas_window = self.lane_canvas.create_window((0, 0), window=self.lane_rows_frame, anchor="nw")
+
+        self.lane_rows_frame.bind("<Configure>", lambda e: self.lane_canvas.configure(scrollregion=self.lane_canvas.bbox("all")))
+        self.lane_canvas.bind("<Configure>", lambda e: self.lane_canvas.itemconfig(self.lane_canvas_window, width=e.width))
 
         self.lane_widgets = []
         self.lane_vars_rel = []
@@ -499,23 +580,39 @@ class ManiaHarnessApp:
         self.lane_vars_key = []
         self.lane_pick_buttons = []
 
-        for i in range(4):
-            lf = tk.Frame(lane_frame, bg="#1f1f23", padx=6, pady=3, relief="flat")
-            lf.pack(fill=tk.X, pady=2)
+        self._build_lane_rows()
+        self._update_quick_key_presets_ui()
 
-            color_tag = tk.Label(lf, text=f" L{i+1} ", bg=LANE_COLORS[i], fg="black", font=("Segoe UI", 8, "bold"), width=3)
-            color_tag.pack(side=tk.LEFT, padx=(0, 4))
+    def _build_lane_rows(self):
+        if not hasattr(self, "lane_rows_frame"):
+            return
+        for widget in self.lane_rows_frame.winfo_children():
+            widget.destroy()
+
+        self.lane_widgets = []
+        self.lane_vars_rel = []
+        self.lane_vars_abs = []
+        self.lane_vars_key = []
+        self.lane_pick_buttons = []
+
+        for i in range(self.key_count):
+            lf = tk.Frame(self.lane_rows_frame, bg="#1f1f23", padx=5, pady=2, relief="flat")
+            lf.pack(fill=tk.X, pady=1)
+
+            color = get_lane_color(i)
+            color_tag = tk.Label(lf, text=f" L{i+1} ", bg=color, fg="black", font=("Segoe UI", 7, "bold"), width=4)
+            color_tag.pack(side=tk.LEFT, padx=(0, 3))
 
             # Keybind entry box
-            tk.Label(lf, text="Key:", bg="#1f1f23", fg=self.fg_dim, font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(0, 1))
+            tk.Label(lf, text="Key:", bg="#1f1f23", fg=self.fg_dim, font=("Segoe UI", 7)).pack(side=tk.LEFT, padx=(0, 1))
             v_key = tk.StringVar(value=self.lane_keys[i])
             self.lane_vars_key.append(v_key)
-            entry_key = tk.Entry(lf, textvariable=v_key, width=3, bg=self.bg_input, fg=self.accent, font=("Consolas", 9, "bold"), justify="center", relief="flat")
-            entry_key.pack(side=tk.LEFT, padx=(0, 4))
+            entry_key = tk.Entry(lf, textvariable=v_key, width=4, bg=self.bg_input, fg=self.accent, font=("Consolas", 8, "bold"), justify="center", relief="flat")
+            entry_key.pack(side=tk.LEFT, padx=(0, 3))
             entry_key.bind("<KeyRelease>", lambda e, idx=i: self._on_key_entry_changed(idx))
 
             # Relative X Entry
-            tk.Label(lf, text="Rel:", bg="#1f1f23", fg=self.fg_dim, font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(2, 1))
+            tk.Label(lf, text="Rel:", bg="#1f1f23", fg=self.fg_dim, font=("Segoe UI", 7)).pack(side=tk.LEFT, padx=(1, 1))
             v_rel = tk.IntVar(value=self.lane_rel_x[i])
             self.lane_vars_rel.append(v_rel)
             spin_rel = tk.Spinbox(lf, from_=-9999, to=9999, textvariable=v_rel, width=5, bg=self.bg_input, fg=self.fg_main, relief="flat", command=lambda idx=i: self._on_lane_spin_changed(idx))
@@ -525,7 +622,7 @@ class ManiaHarnessApp:
             # Screen X label
             v_abs = tk.StringVar(value=f"(X:{self.bbox_left + self.lane_rel_x[i]})")
             self.lane_vars_abs.append(v_abs)
-            lbl_abs = tk.Label(lf, textvariable=v_abs, bg="#1f1f23", fg=self.fg_dim, font=("Consolas", 8), width=8)
+            lbl_abs = tk.Label(lf, textvariable=v_abs, bg="#1f1f23", fg=self.fg_dim, font=("Consolas", 7), width=8)
             lbl_abs.pack(side=tk.LEFT, padx=1)
 
             # Nudge buttons
@@ -536,13 +633,151 @@ class ManiaHarnessApp:
 
             # Select button for click placement
             btn_pick = tk.Button(
-                lf, text="Pick", bg="#3f3f46", fg="white", relief="flat", padx=4, pady=0, font=("Segoe UI", 8),
+                lf, text="Pick", bg="#3f3f46", fg="white", relief="flat", padx=3, pady=0, font=("Segoe UI", 7),
                 command=lambda idx=i: self.select_lane_for_click(idx)
             )
             btn_pick.pack(side=tk.RIGHT, padx=1)
             self.lane_pick_buttons.append(btn_pick)
 
+            self.lane_widgets.append(lf)
+
         self._update_lane_pick_buttons()
+        self._update_quick_key_presets_ui()
+
+    def _update_quick_key_presets_ui(self):
+        if not hasattr(self, "quick_key_box"):
+            return
+        for widget in self.quick_key_box.winfo_children():
+            widget.destroy()
+
+        tk.Label(self.quick_key_box, text="Key Sets:", bg=self.bg_panel, fg=self.fg_dim, font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(0, 4))
+
+        count = self.key_count
+        if count == 4:
+            presets = [
+                ("QW[]", ["q", "w", "[", "]"]),
+                ("DFJK", ["d", "f", "j", "k"]),
+                ("ASKL", ["a", "s", "k", "l"]),
+                ("ZX./", ["z", "x", ".", "/"]),
+            ]
+        elif count == 5:
+            presets = [
+                ("DF Sp JK", ["d", "f", "space", "j", "k"]),
+                ("AS Sp KL", ["a", "s", "space", "k", "l"]),
+            ]
+        elif count == 6:
+            presets = [
+                ("SDF JKL", ["s", "d", "f", "j", "k", "l"]),
+                ("ASD JKL", ["a", "s", "d", "j", "k", "l"]),
+                ("QWE IOP", ["q", "w", "e", "i", "o", "p"]),
+            ]
+        elif count == 7:
+            presets = [
+                ("SDF Sp JKL", ["s", "d", "f", "space", "j", "k", "l"]),
+                ("ASD Sp JKL", ["a", "s", "d", "space", "j", "k", "l"]),
+            ]
+        elif count == 8:
+            presets = [
+                ("ASDF JKL;", ["a", "s", "d", "f", "j", "k", "l", ";"]),
+                ("ASDF HJKL", ["a", "s", "d", "f", "h", "j", "k", "l"]),
+            ]
+        elif count == 9:
+            presets = [
+                ("ASDF Sp JKL;", ["a", "s", "d", "f", "space", "j", "k", "l", ";"]),
+            ]
+        elif count == 10:
+            presets = [
+                ("ASDFG HJKL;", ["a", "s", "d", "f", "g", "h", "j", "k", "l", ";"]),
+                ("QWER V NUIOP", ["q", "w", "e", "r", "v", "n", "u", "i", "o", "p"]),
+            ]
+        else:
+            default_layout = DEFAULT_KEY_LAYOUTS.get(count, ALL_20_KEYS[:count])
+            name = f"Default {count}K"
+            presets = [(name, default_layout)]
+
+        for name, keys in presets:
+            btn_q = tk.Button(
+                self.quick_key_box, text=name, bg="#3f3f46", fg="white", font=("Consolas", 7),
+                relief="flat", padx=3, pady=1, command=lambda k_list=keys: self.apply_key_preset(k_list)
+            )
+            btn_q.pack(side=tk.LEFT, padx=1)
+
+    def _on_key_count_spin_changed(self):
+        try:
+            val = self.var_key_count.get()
+            if 1 <= val <= 20 and val != self.key_count:
+                self.set_key_count(val)
+        except Exception:
+            pass
+
+    def set_key_count(self, new_count: int, rel_x_list=None, keys_list=None):
+        new_count = max(1, min(20, int(new_count)))
+        old_count = self.key_count
+        self.key_count = new_count
+        if hasattr(self, "var_key_count"):
+            self.var_key_count.set(new_count)
+
+        w = max(1, self.bbox_right - self.bbox_left)
+
+        if rel_x_list is not None and len(rel_x_list) >= new_count:
+            self.lane_rel_x = [int(x) for x in rel_x_list[:new_count]]
+        else:
+            if new_count > len(self.lane_rel_x):
+                for i in range(len(self.lane_rel_x), new_count):
+                    default_rel = int((w / new_count) * (i + 0.5))
+                    self.lane_rel_x.append(default_rel)
+            elif new_count < len(self.lane_rel_x):
+                self.lane_rel_x = self.lane_rel_x[:new_count]
+
+        if keys_list is not None and len(keys_list) >= new_count:
+            self.lane_keys = [str(k).lower().strip() for k in keys_list[:new_count]]
+        else:
+            if new_count in DEFAULT_KEY_LAYOUTS and (old_count != new_count or len(self.lane_keys) != new_count):
+                layout = DEFAULT_KEY_LAYOUTS[new_count]
+                updated_keys = list(self.lane_keys[:new_count])
+                while len(updated_keys) < new_count:
+                    idx = len(updated_keys)
+                    if idx < len(layout):
+                        updated_keys.append(layout[idx])
+                    elif idx < len(ALL_20_KEYS):
+                        updated_keys.append(ALL_20_KEYS[idx])
+                    else:
+                        updated_keys.append(f"k{idx+1}")
+                self.lane_keys = updated_keys[:new_count]
+            else:
+                while len(self.lane_keys) < new_count:
+                    idx = len(self.lane_keys)
+                    if idx < len(ALL_20_KEYS):
+                        self.lane_keys.append(ALL_20_KEYS[idx])
+                    else:
+                        self.lane_keys.append(f"k{idx+1}")
+                self.lane_keys = self.lane_keys[:new_count]
+
+        if self.selected_lane_idx >= new_count:
+            self.selected_lane_idx = max(0, new_count - 1)
+
+        if hasattr(self, "lane_rows_frame"):
+            self._build_lane_rows()
+        if hasattr(self, "canvas"):
+            self.redraw_canvas()
+        if hasattr(self, "strip_preview_frame"):
+            self.update_live_preview()
+        if hasattr(self, "lbl_status"):
+            self.lbl_status.config(text=f"Switched to {new_count}-key mode.")
+
+    def auto_space_lanes(self):
+        """Evenly spaces all lanes across the bounding box width."""
+        w = max(1, self.bbox_right - self.bbox_left)
+        count = self.key_count
+        for i in range(count):
+            rel_x = int((w / count) * (i + 0.5))
+            self.lane_rel_x[i] = rel_x
+            if i < len(self.lane_vars_rel):
+                self.lane_vars_rel[i].set(rel_x)
+                self.lane_vars_abs[i].set(f"(X:{self.bbox_left + rel_x})")
+        self.redraw_canvas()
+        self.update_live_preview()
+        self.lbl_status.config(text=f"Auto-spaced {count} lanes across {w}px width.")
 
         # 3. Live Strip & Detection Preview
         preview_frame = tk.LabelFrame(sidebar, text="Live Detection Preview (at Judgement Line)", bg=self.bg_panel, fg=self.accent, font=("Segoe UI", 9, "bold"), padx=8, pady=4)
@@ -597,8 +832,9 @@ class ManiaHarnessApp:
         self.root.bind("<Key-s>", lambda e: self.save_to_target_file())
         self.root.bind("<Key-S>", lambda e: self.save_to_target_file())
 
-        for k in range(1, 5):
-            self.root.bind(f"<Key-{k}>", lambda e, idx=k-1: self.select_lane_for_click(idx))
+        for k in range(1, 10):
+            self.root.bind(f"<Key-{k}>", lambda e, idx=k-1: self.select_lane_for_click(idx) if idx < self.key_count else None)
+        self.root.bind("<Key-0>", lambda e: self.select_lane_for_click(9) if self.key_count >= 10 else None)
 
     def _try_load_initial_image(self):
         script_dir = ROOT_DIR
@@ -629,12 +865,12 @@ class ManiaHarnessApp:
                  "1. Press [📸 Capture Now] or [⏱️ In 2s] to grab your osu!mania screen\n"
                  "   OR click [📂 Load Screenshot] to open an existing screenshot.\n\n"
                  "2. Use [🔲 Box Mode] to drag a rectangle over the judgement line.\n"
-                 "3. Use [🎯 Lane Mode] to click the 4 lane target points.\n"
-                 "4. Edit Keybinds (e.g. QW[], DFJK) and save/load Presets.\n"
+                 "3. Select Key Count (1 to 20 keys) & use [🎯 Lane Mode] to click lane targets.\n"
+                 "4. Edit Keybinds (custom or quick sets) and save/load Presets.\n"
                  "5. Click [💾 Save to maniaplayer.py] or [⚡ Apply to Player] to update the bot!\n\n"
                  f"Current values loaded:\n"
                  f"  BBOX: ({self.bbox_left}, {self.bbox_top}, {self.bbox_right}, {self.bbox_bottom})\n"
-                 f"  LANES: {self.lane_rel_x} | KEYS: {self.lane_keys}",
+                 f"  LANES ({self.key_count}K): {self.lane_rel_x} | KEYS: {self.lane_keys}",
             fill="#a1a1aa", font=("Segoe UI", 12), justify="center"
         )
 
@@ -680,28 +916,27 @@ class ManiaHarnessApp:
             self.judgement_line = int(data.get("judgement_line", 0))
 
             lanes = data.get("lanes", [])
-            for i in range(min(4, len(lanes))):
-                l_data = lanes[i]
-                if "rel_x" in l_data:
-                    self.lane_rel_x[i] = int(l_data["rel_x"])
-                elif "x" in l_data:
-                    self.lane_rel_x[i] = int(l_data["x"])
-
-                if "key" in l_data:
-                    k = str(l_data["key"]).strip()
-                    self.lane_keys[i] = k
-                    self.lane_vars_key[i].set(k)
+            if lanes:
+                new_count = min(20, max(1, len(lanes)))
+                rx_list = []
+                k_list = []
+                for l_data in lanes[:new_count]:
+                    if "rel_x" in l_data:
+                        rx_list.append(int(l_data["rel_x"]))
+                    elif "x" in l_data:
+                        rx_list.append(int(l_data["x"]))
+                    else:
+                        rx_list.append(0)
+                    k_list.append(str(l_data.get("key", "q")).strip().lower())
+                self.set_key_count(new_count, rel_x_list=rx_list, keys_list=k_list)
 
             self._sync_bbox_to_inputs()
             self.var_jl.set(self.judgement_line)
-            for i in range(4):
-                self.lane_vars_rel[i].set(self.lane_rel_x[i])
-
             self.redraw_canvas()
             self.update_live_preview()
-            self.lbl_status.config(text=f"Loaded preset: {preset_name}")
+            self.lbl_status.config(text=f"Loaded preset: {preset_name} ({self.key_count} Keys)")
             if not silent:
-                messagebox.showinfo("Preset Loaded", f"Successfully loaded preset:\n{preset_name}\n\nClick [💾 Save to maniaplayer.py] or [⚡ Apply to Player] to activate it.")
+                messagebox.showinfo("Preset Loaded", f"Successfully loaded preset:\n{preset_name} ({self.key_count} Keys)\n\nClick [💾 Save to maniaplayer.py] or [⚡ Apply to Player] to activate it.")
         except Exception as e:
             if not silent:
                 messagebox.showerror("Error", f"Failed to load preset:\n{e}")
@@ -714,7 +949,7 @@ class ManiaHarnessApp:
 
         name = simpledialog.askstring(
             "Save Preset",
-            "Enter a name for this preset (e.g. WhiteCat_23_Speed):",
+            f"Enter a name for this {self.key_count}-key preset (e.g. Skin_{self.key_count}K):",
             parent=self.root
         )
 
@@ -739,6 +974,7 @@ class ManiaHarnessApp:
         out_path = self.presets_dir / file_name
         data = {
             "preset_name": clean_name,
+            "key_count": self.key_count,
             "bbox": [self.bbox_left, self.bbox_top, self.bbox_right, self.bbox_bottom],
             "judgement_line": self.judgement_line,
             "global_threshold": 30,
@@ -749,7 +985,7 @@ class ManiaHarnessApp:
                     "key": self.lane_keys[i],
                     "threshold": 30
                 }
-                for i in range(4)
+                for i in range(self.key_count)
             ]
         }
 
@@ -757,7 +993,7 @@ class ManiaHarnessApp:
             out_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
             self._refresh_presets_list(select_name=base_name)
             self.lbl_status.config(text=f"Preset saved: {file_name}")
-            messagebox.showinfo("Preset Saved", f"Successfully saved preset to:\n{out_path.name}")
+            messagebox.showinfo("Preset Saved", f"Successfully saved {self.key_count}-key preset to:\n{out_path.name}")
         except Exception as e:
             messagebox.showerror("Save Failed", f"Could not save preset:\n{e}")
 
@@ -771,19 +1007,21 @@ class ManiaHarnessApp:
     # Keybind Mutation Logic
     # -------------------------------------------------------------
     def _on_key_entry_changed(self, lane_idx: int):
-        val = self.lane_vars_key[lane_idx].get().strip().lower()
-        if val:
-            self.lane_keys[lane_idx] = val
-            self.redraw_canvas()
-            self.update_live_preview()
+        if lane_idx < len(self.lane_vars_key):
+            val = self.lane_vars_key[lane_idx].get().strip().lower()
+            if val:
+                self.lane_keys[lane_idx] = val
+                self.redraw_canvas()
+                self.update_live_preview()
 
     def apply_key_preset(self, keys: list):
-        for i in range(min(4, len(keys))):
+        for i in range(min(self.key_count, len(keys))):
             self.lane_keys[i] = str(keys[i]).lower()
-            self.lane_vars_key[i].set(self.lane_keys[i])
+            if i < len(self.lane_vars_key):
+                self.lane_vars_key[i].set(self.lane_keys[i])
         self.redraw_canvas()
         self.update_live_preview()
-        self.lbl_status.config(text=f"Applied keybinds preset: {keys}")
+        self.lbl_status.config(text=f"Applied keybinds: {self.lane_keys[:self.key_count]}")
 
     # -------------------------------------------------------------
     # Screen Capture Logic (Disappears window, captures, reappears)
@@ -1037,28 +1275,31 @@ class ManiaHarnessApp:
         if height_px <= 1:
             vis_y2 = bbox_y1_c + max(3, 4 * self.zoom_factor)
 
-        for i in range(4):
+        for i in range(self.key_count):
             rel_x = self.lane_rel_x[i]
             abs_x = self.bbox_left + rel_x
             c_x, _ = self.img_to_canvas_coords(abs_x, 0)
-            color = LANE_COLORS[i]
+            color = get_lane_color(i)
             key_name = self.lane_keys[i].upper()
 
             self.canvas.create_line(
                 c_x, max(0, bbox_y1_c - 60), c_x, min(canvas_h, vis_y2 + 60),
-                fill=color, width=2, tags=(f"lane_line_{i}", "lane_marker")
+                fill=color, width=2 if self.key_count <= 8 else 1, tags=(f"lane_line_{i}", "lane_marker")
             )
 
             marker_y = bbox_y1_c + (self.judgement_line * self.zoom_factor)
+            r = 5 if self.key_count <= 8 else 3
             self.canvas.create_oval(
-                c_x - 5, marker_y - 5, c_x + 5, marker_y + 5,
+                c_x - r, marker_y - r, c_x + r, marker_y + r,
                 fill=color, outline="white", width=1, tags=(f"lane_point_{i}", "lane_marker")
             )
 
+            y_offset = -16 if (i % 2 == 0 or self.key_count <= 6) else -28
+            label_text = f"L{i+1}:[{key_name}]" if self.key_count > 6 else f"L{i+1}: [{key_name}] (+{rel_x})"
             self.canvas.create_text(
-                c_x, max(12, bbox_y1_c - 16),
-                text=f"L{i+1}: [{key_name}] (+{rel_x})",
-                fill=color, font=("Consolas", 8, "bold"), tags=(f"lane_text_{i}", "lane_marker")
+                c_x, max(12, bbox_y1_c + y_offset),
+                text=label_text,
+                fill=color, font=("Consolas", 8 if self.key_count <= 8 else 7, "bold"), tags=(f"lane_text_{i}", "lane_marker")
             )
 
     # -------------------------------------------------------------
@@ -1071,7 +1312,7 @@ class ManiaHarnessApp:
 
         if self.current_mode == "lane":
             self.set_lane_position_from_screen_x(self.selected_lane_idx, img_x)
-            if self.selected_lane_idx < 3:
+            if self.selected_lane_idx < self.key_count - 1:
                 self.selected_lane_idx += 1
             else:
                 self.set_mode("box")
@@ -1252,24 +1493,28 @@ class ManiaHarnessApp:
             px = strip_img.load()
             jl_y = max(0, min(self.judgement_line, strip_img.height - 1))
 
-            for i in range(4):
+            for i in range(self.key_count):
                 rx = self.lane_rel_x[i]
                 c_marker_x = rx * scale_x
-                color = LANE_COLORS[i]
+                color = get_lane_color(i)
                 key_name = self.lane_keys[i].upper()
 
-                self.canvas_strip.create_line(c_marker_x, 0, c_marker_x, ch, fill=color, width=2)
-                self.canvas_strip.create_text(c_marker_x + 3, 8, text=f"L{i+1}:{key_name}", fill="white", font=("Segoe UI", 7, "bold"))
+                self.canvas_strip.create_line(c_marker_x, 0, c_marker_x, ch, fill=color, width=2 if self.key_count <= 8 else 1)
+                if self.key_count <= 10 or i % 2 == 0:
+                    self.canvas_strip.create_text(c_marker_x + 2, 8, text=f"{key_name}", fill="white", font=("Segoe UI", 7, "bold"))
 
                 if 0 <= rx < strip_img.width:
                     rgb = px[rx, jl_y]
                     b = int(sum(rgb[:3]) / 3)
-                    status_flag = f"HIT [{key_name}]" if b > 30 else "OFF"
-                    detection_texts.append(f"L{i+1}: {b} ({status_flag})")
+                    status_flag = f"HIT" if b > 30 else "OFF"
+                    detection_texts.append(f"L{i+1}:{b}({status_flag})")
                 else:
-                    detection_texts.append(f"L{i+1}: OUT")
+                    detection_texts.append(f"L{i+1}:OUT")
 
-            status_str = " | ".join(detection_texts[:2]) + "\n" + " | ".join(detection_texts[2:])
+            chunks = [detection_texts[j:j+4] for j in range(0, len(detection_texts), 4)]
+            status_str = "\n".join(" | ".join(c) for c in chunks[:3])
+            if len(chunks) > 3:
+                status_str += f"\n... (+{len(detection_texts) - 12} more lanes)"
             self.lbl_detection_status.config(text=f"Lane Brightness (sum(RGB)/3 > 30):\n{status_str}")
         except Exception:
             pass
@@ -1291,29 +1536,32 @@ class ManiaHarnessApp:
         self.redraw_canvas()
 
     def select_lane_for_click(self, lane_idx: int):
-        self.selected_lane_idx = lane_idx
+        self.selected_lane_idx = max(0, min(self.key_count - 1, lane_idx))
         self.set_mode("lane")
-        self.lbl_status.config(text=f"Click on canvas to set Lane {lane_idx + 1} position [key: {self.lane_keys[lane_idx].upper()}].")
+        self.lbl_status.config(text=f"Click on canvas to set Lane {self.selected_lane_idx + 1} position [key: {self.lane_keys[self.selected_lane_idx].upper()}].")
 
     def _update_lane_pick_buttons(self):
         for i, btn in enumerate(self.lane_pick_buttons):
-            if self.current_mode == "lane" and self.selected_lane_idx == i:
-                btn.config(bg=LANE_COLORS[i], fg="black", text="ACTIVE")
-            else:
-                btn.config(bg="#3f3f46", fg="white", text="Pick")
+            if i < self.key_count:
+                if self.current_mode == "lane" and self.selected_lane_idx == i:
+                    btn.config(bg=get_lane_color(i), fg="black", text="ACTIVE")
+                else:
+                    btn.config(bg="#3f3f46", fg="white", text="Pick")
 
     def set_lane_position_from_screen_x(self, lane_idx: int, screen_x: int):
         rel_x = screen_x - self.bbox_left
         self.lane_rel_x[lane_idx] = rel_x
-        self.lane_vars_rel[lane_idx].set(rel_x)
-        self.lane_vars_abs[lane_idx].set(f"(X:{screen_x})")
+        if lane_idx < len(self.lane_vars_rel):
+            self.lane_vars_rel[lane_idx].set(rel_x)
+            self.lane_vars_abs[lane_idx].set(f"(X:{screen_x})")
         self.redraw_canvas()
         self.update_live_preview()
 
     def nudge_lane(self, lane_idx: int, delta: int):
         self.lane_rel_x[lane_idx] += delta
-        self.lane_vars_rel[lane_idx].set(self.lane_rel_x[lane_idx])
-        self.lane_vars_abs[lane_idx].set(f"(X:{self.bbox_left + self.lane_rel_x[lane_idx]})")
+        if lane_idx < len(self.lane_vars_rel):
+            self.lane_vars_rel[lane_idx].set(self.lane_rel_x[lane_idx])
+            self.lane_vars_abs[lane_idx].set(f"(X:{self.bbox_left + self.lane_rel_x[lane_idx]})")
         self.redraw_canvas()
         self.update_live_preview()
 
@@ -1365,7 +1613,7 @@ class ManiaHarnessApp:
             w = max(1, self.bbox_right - self.bbox_left)
             h = max(1, self.bbox_bottom - self.bbox_top)
             self.lbl_bbox_dims.config(text=f"Width: {w} px | Height: {h} px")
-            for i in range(4):
+            for i in range(min(self.key_count, len(self.lane_vars_abs))):
                 self.lane_vars_abs[i].set(f"(X:{self.bbox_left + self.lane_rel_x[i]})")
             self.redraw_canvas()
             self.update_live_preview()
@@ -1388,7 +1636,7 @@ class ManiaHarnessApp:
         w = max(1, self.bbox_right - self.bbox_left)
         h = max(1, self.bbox_bottom - self.bbox_top)
         self.lbl_bbox_dims.config(text=f"Width: {w} px | Height: {h} px")
-        for i in range(4):
+        for i in range(min(self.key_count, len(self.lane_vars_abs))):
             self.lane_vars_abs[i].set(f"(X:{self.bbox_left + self.lane_rel_x[i]})")
 
     # -------------------------------------------------------------
@@ -1398,8 +1646,8 @@ class ManiaHarnessApp:
         """Immediately applies the current calibration parameters to the running Mania Player and memory."""
         bbox = (self.bbox_left, self.bbox_top, self.bbox_right, self.bbox_bottom)
         jl = self.judgement_line
-        lanes = list(self.lane_rel_x)
-        keys = list(self.lane_keys)
+        lanes = list(self.lane_rel_x[:self.key_count])
+        keys = list(self.lane_keys[:self.key_count])
 
         # 1. Update in sys.modules if loaded
         for mod_name in ("raw_maniaplayer", "maniaplayer"):
@@ -1408,14 +1656,11 @@ class ManiaHarnessApp:
                 try:
                     mod.BBOX = bbox
                     mod.JUDGEMENENT_LINE = jl
-                    mod.LANE1 = lanes[0]
-                    mod.LANE2 = lanes[1]
-                    mod.LANE3 = lanes[2]
-                    mod.LANE4 = lanes[3]
-                    mod.KEY1 = keys[0]
-                    mod.KEY2 = keys[1]
-                    mod.KEY3 = keys[2]
-                    mod.KEY4 = keys[3]
+                    mod.LANES = lanes
+                    mod.KEYS = keys
+                    for i in range(min(4, len(lanes))):
+                        setattr(mod, f"LANE{i+1}", lanes[i])
+                        setattr(mod, f"KEY{i+1}", keys[i])
                 except Exception:
                     pass
 
@@ -1427,13 +1672,17 @@ class ManiaHarnessApp:
                 print(f"[Callback Warning] {e}")
 
         keys_str = "/".join(keys).upper()
-        self.lbl_status.config(text=f"⚡ Live update applied! BBOX: {bbox} | Keys: {keys_str}")
+        self.lbl_status.config(text=f"⚡ Live update applied! {self.key_count} Keys: {keys_str}")
 
     # -------------------------------------------------------------
     # Target File Read & Save Logic
     # -------------------------------------------------------------
     def load_from_target_file(self, silent: bool = False):
         loaded = False
+        loaded_count = 0
+        loaded_lanes = []
+        loaded_keys = []
+
         if self.target_file.exists():
             try:
                 content = self.target_file.read_text(encoding="utf-8")
@@ -1451,19 +1700,33 @@ class ManiaHarnessApp:
                 if m_jl:
                     self.judgement_line = int(m_jl.group(1))
 
-                # Parse LANE1..LANE4
-                for i in range(4):
-                    m_lane = re.search(rf"^LANE{i+1}\s*=\s*(\d+)", content, re.MULTILINE)
-                    if m_lane:
-                        self.lane_rel_x[i] = int(m_lane.group(1))
+                # Parse dynamic LANES = [...]
+                m_lanes = re.search(r"^LANES\s*=\s*\[([\d\s,]+)\]", content, re.MULTILINE)
+                if m_lanes:
+                    l_vals = [int(x.strip()) for x in m_lanes.group(1).split(",") if x.strip()]
+                    if l_vals:
+                        loaded_lanes = l_vals
+                        loaded_count = len(l_vals)
 
-                # Parse KEY1..KEY4
-                for i in range(4):
-                    m_key = re.search(rf"^KEY{i+1}\s*=\s*['\"]([^'\"]+)['\"]", content, re.MULTILINE)
-                    if m_key:
-                        self.lane_keys[i] = m_key.group(1).strip().lower()
-                        if hasattr(self, "lane_vars_key"):
-                            self.lane_vars_key[i].set(self.lane_keys[i])
+                # Parse dynamic KEYS = [...]
+                m_keys = re.search(r"^KEYS\s*=\s*\[([^\]]+)\]", content, re.MULTILINE)
+                if m_keys:
+                    k_vals = [re.sub(r"['\"\s]", "", k).lower() for k in m_keys.group(1).split(",") if k.strip()]
+                    if k_vals:
+                        loaded_keys = k_vals
+
+                # If dynamic arrays weren't found, check LANE1..LANE20
+                if not loaded_lanes:
+                    for i in range(1, 21):
+                        m_l = re.search(rf"^LANE{i}\s*=\s*(\d+)", content, re.MULTILINE)
+                        m_k = re.search(rf"^KEY{i}\s*=\s*['\"]([^'\"]+)['\"]", content, re.MULTILINE)
+                        if m_l:
+                            loaded_lanes.append(int(m_l.group(1)))
+                            loaded_keys.append(m_k.group(1).strip().lower() if m_k else f"k{i}")
+                        else:
+                            break
+                    if loaded_lanes:
+                        loaded_count = len(loaded_lanes)
 
             except Exception as e:
                 if not silent:
@@ -1481,25 +1744,25 @@ class ManiaHarnessApp:
                     self.judgement_line = int(cfg.get("judgement_line", 0))
 
                 lanes = cfg.get("lanes", [])
-                if len(lanes) >= 4:
-                    for i in range(4):
-                        if not loaded:
-                            self.lane_rel_x[i] = int(lanes[i].get("x", self.lane_rel_x[i]))
-                        k = lanes[i].get("key")
-                        if k:
-                            self.lane_keys[i] = str(k).strip().lower()
-                            if hasattr(self, "lane_vars_key"):
-                                self.lane_vars_key[i].set(self.lane_keys[i])
+                if lanes:
+                    cfg_count = min(20, max(1, len(lanes)))
+                    cfg_rel = [int(l.get("x", l.get("rel_x", 0))) for l in lanes[:cfg_count]]
+                    cfg_k = [str(l.get("key", "q")).strip().lower() for l in lanes[:cfg_count]]
+                    if not loaded_lanes or cfg_count > loaded_count:
+                        loaded_lanes = cfg_rel
+                        loaded_keys = cfg_k
+                        loaded_count = cfg_count
             except Exception:
                 pass
+
+        if loaded_count > 0:
+            self.set_key_count(loaded_count, rel_x_list=loaded_lanes, keys_list=loaded_keys)
+        else:
+            self.set_key_count(4, rel_x_list=[39, 215, 353, 502], keys_list=["q", "w", "[", "]"])
 
         if hasattr(self, "var_left"):
             self._sync_bbox_to_inputs()
             self.var_jl.set(self.judgement_line)
-            for i in range(4):
-                self.lane_vars_rel[i].set(self.lane_rel_x[i])
-                if hasattr(self, "lane_vars_key"):
-                    self.lane_vars_key[i].set(self.lane_keys[i])
             self.redraw_canvas()
             self.update_live_preview()
 
@@ -1509,12 +1772,12 @@ class ManiaHarnessApp:
                 f"Loaded from {self.target_file.name}:\n"
                 f"BBOX: ({self.bbox_left}, {self.bbox_top}, {self.bbox_right}, {self.bbox_bottom})\n"
                 f"Judgement Line: {self.judgement_line}\n"
-                f"Lanes: {self.lane_rel_x}\n"
-                f"Keys: {self.lane_keys}"
+                f"Keys ({self.key_count}): {self.lane_keys[:self.key_count]}\n"
+                f"Lanes: {self.lane_rel_x[:self.key_count]}"
             )
 
     def save_to_target_file(self):
-        """Creates a timestamped backup and updates BBOX, JUDGEMENENT_LINE, LANE1..4, and KEY1..4 in target file and configs."""
+        """Creates a timestamped backup and updates BBOX, JUDGEMENENT_LINE, LANES, and KEYS in target file and configs."""
         if not self.target_file.exists():
             messagebox.showerror("Error", f"Target file does not exist:\n{self.target_file}")
             return
@@ -1524,8 +1787,8 @@ class ManiaHarnessApp:
             f"Update {self.target_file.name} with:\n\n"
             f"BBOX = ({self.bbox_left}, {self.bbox_top}, {self.bbox_right}, {self.bbox_bottom})\n"
             f"JUDGEMENENT_LINE = {self.judgement_line}\n"
-            f"LANES = {self.lane_rel_x}\n"
-            f"KEYS = {self.lane_keys}\n\n"
+            f"LANES ({self.key_count}K) = {self.lane_rel_x[:self.key_count]}\n"
+            f"KEYS = {self.lane_keys[:self.key_count]}\n\n"
             f"A backup will be created automatically. Proceed?"
         )
         if not confirm:
@@ -1549,7 +1812,22 @@ class ManiaHarnessApp:
             else:
                 content = f"JUDGEMENENT_LINE = {self.judgement_line}\n" + content
 
-            for i in range(4):
+            # Update or insert dynamic LANES and KEYS lists
+            lanes_repr = str(self.lane_rel_x[:self.key_count])
+            keys_repr = json.dumps(self.lane_keys[:self.key_count])
+
+            if re.search(r"^LANES\s*=", content, re.MULTILINE):
+                content = re.sub(r"^(LANES\s*=\s*).*$", rf"\g<1>{lanes_repr}", content, flags=re.MULTILINE)
+            else:
+                content = f"LANES = {lanes_repr}\n" + content
+
+            if re.search(r"^KEYS\s*=", content, re.MULTILINE):
+                content = re.sub(r"^(KEYS\s*=\s*).*$", rf"\g<1>{keys_repr}", content, flags=re.MULTILINE)
+            else:
+                content = f"KEYS = {keys_repr}\n" + content
+
+            # Also maintain LANE1..LANE4 & KEY1..KEY4 for backward compatibility
+            for i in range(min(4, self.key_count)):
                 if re.search(rf"^LANE{i+1}\s*=", content, re.MULTILINE):
                     content = re.sub(
                         rf"^(LANE{i+1}\s*=\s*).*$",
@@ -1559,7 +1837,6 @@ class ManiaHarnessApp:
                 else:
                     content = f"LANE{i+1} = {self.lane_rel_x[i]}\n" + content
 
-            for i in range(4):
                 if re.search(rf"^KEY{i+1}\s*=", content, re.MULTILINE):
                     content = re.sub(
                         rf"^(KEY{i+1}\s*=\s*).*$",
@@ -1593,10 +1870,16 @@ class ManiaHarnessApp:
                     cfg = json.loads(self.config_file.read_text(encoding="utf-8"))
                     cfg["bbox"] = [self.bbox_left, self.bbox_top, self.bbox_right, self.bbox_bottom]
                     cfg["judgement_line"] = self.judgement_line
-                    if "lanes" in cfg and len(cfg["lanes"]) >= 4:
-                        for i in range(4):
-                            cfg["lanes"][i]["x"] = self.lane_rel_x[i]
-                            cfg["lanes"][i]["key"] = self.lane_keys[i]
+                    cfg["key_count"] = self.key_count
+                    cfg["lanes"] = [
+                        {
+                            "name": f"Lane {i+1}",
+                            "x": self.lane_rel_x[i],
+                            "key": self.lane_keys[i],
+                            "threshold": 30
+                        }
+                        for i in range(self.key_count)
+                    ]
                     self.config_file.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
                 except Exception:
                     pass
@@ -1608,10 +1891,15 @@ class ManiaHarnessApp:
                     s_data = json.loads(settings_path.read_text(encoding="utf-8"))
                     s_data["bbox"] = [self.bbox_left, self.bbox_top, self.bbox_right, self.bbox_bottom]
                     s_data["judgement_line"] = self.judgement_line
-                    if "lanes" in s_data and len(s_data["lanes"]) >= 4:
-                        for i in range(4):
-                            s_data["lanes"][i]["x"] = self.lane_rel_x[i]
-                            s_data["lanes"][i]["key"] = self.lane_keys[i]
+                    s_data["lanes"] = [
+                        {
+                            "name": f"Lane {i+1}",
+                            "x": self.lane_rel_x[i],
+                            "key": self.lane_keys[i],
+                            "threshold": 30
+                        }
+                        for i in range(self.key_count)
+                    ]
                     settings_path.write_text(json.dumps(s_data, indent=2), encoding="utf-8")
                 except Exception:
                     pass
@@ -1621,7 +1909,7 @@ class ManiaHarnessApp:
 
             messagebox.showinfo(
                 "Saved Successfully",
-                f"Successfully updated {self.target_file.name} and Mania Player!\n\n"
+                f"Successfully updated {self.target_file.name} and Mania Player ({self.key_count} Keys)!\n\n"
                 f"Backup saved to:\n{backup_path.name}"
             )
             self.lbl_status.config(text=f"Saved updated calibration to {self.target_file.name}")
@@ -1630,18 +1918,15 @@ class ManiaHarnessApp:
 
     def copy_python_code(self):
         snippet = (
-            f"# Calibrated coordinates & keybinds for Mania Player\n"
+            f"# Calibrated coordinates & keybinds for Mania Player ({self.key_count} Keys)\n"
             f"JUDGEMENENT_LINE = {self.judgement_line}\n"
-            f"LANE1 = {self.lane_rel_x[0]}\n"
-            f"LANE2 = {self.lane_rel_x[1]}\n"
-            f"LANE3 = {self.lane_rel_x[2]}\n"
-            f"LANE4 = {self.lane_rel_x[3]}\n"
-            f'KEY1 = "{self.lane_keys[0]}"\n'
-            f'KEY2 = "{self.lane_keys[1]}"\n'
-            f'KEY3 = "{self.lane_keys[2]}"\n'
-            f'KEY4 = "{self.lane_keys[3]}"\n'
+            f"LANES = {self.lane_rel_x[:self.key_count]}\n"
+            f"KEYS = {self.lane_keys[:self.key_count]}\n"
             f"BBOX = ({self.bbox_left}, {self.bbox_top}, {self.bbox_right}, {self.bbox_bottom})\n"
         )
+        for i in range(min(4, self.key_count)):
+            snippet += f"LANE{i+1} = {self.lane_rel_x[i]}\n"
+            snippet += f'KEY{i+1} = "{self.lane_keys[i]}"\n'
         self.root.clipboard_clear()
         self.root.clipboard_append(snippet)
         self.lbl_status.config(text="Calibration code snippet copied to clipboard!")
