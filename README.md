@@ -49,7 +49,8 @@ ManiaPlayerV1.0/
 ├── mania_harness.py            # Visual calibration harness and coordinate tuner
 ├── maniaplayer.py              # High-speed Python automation engine (MSS / PIL)
 ├── maniaplayer.c               # Native Win32 C engine for ultra-low latency execution
-├── maniaplayer.exe             # Compiled standalone executable
+├── maniaplayer_native.exe      # Compiled native Win32 C binary (via build.bat)
+├── maniaplayer.exe             # Standalone GUI Dashboard executable
 ├── mania_config.json           # Active configuration for Python engine and GUI
 ├── settings.json               # Active configuration for native C engine
 ├── ManiaPlayer.spec            # PyInstaller build specification
@@ -66,7 +67,8 @@ ManiaPlayerV1.0/
 | [`mania_harness.py`](file:///c:/Users/CHRISTOPHER/Documents/Python%20Projects/Computer%20Vision%20Projects/ManiaPlayerV1.0/mania_harness.py) | Visual calibration tool for fine-tuning BBOX, judgement line, lane positions (1-20 keys), and keybinds. |
 | [`maniaplayer.py`](file:///c:/Users/CHRISTOPHER/Documents/Python%20Projects/Computer%20Vision%20Projects/ManiaPlayerV1.0/maniaplayer.py) | Python automation core utilizing MSS direct screen capture and `pynput` keyboard simulation. |
 | [`maniaplayer.c`](file:///c:/Users/CHRISTOPHER/Documents/Python%20Projects/Computer%20Vision%20Projects/ManiaPlayerV1.0/maniaplayer.c) | High-performance native C source using Win32 GDI `BitBlt` and `SendInput` for minimum latency. |
-| [`maniaplayer.exe`](file:///c:/Users/CHRISTOPHER/Documents/Python%20Projects/Computer%20Vision%20Projects/ManiaPlayerV1.0/maniaplayer.exe) | Compiled standalone binary launcher. |
+| [`maniaplayer_native.exe`](file:///c:/Users/CHRISTOPHER/Documents/Python%20Projects/Computer%20Vision%20Projects/ManiaPlayerV1.0/maniaplayer_native.exe) | Compiled native Win32 C engine binary. |
+| [`maniaplayer.exe`](file:///c:/Users/CHRISTOPHER/Documents/Python%20Projects/Computer%20Vision%20Projects/ManiaPlayerV1.0/maniaplayer.exe) | Compiled standalone GUI dashboard launcher. |
 | [`backups/`](file:///c:/Users/CHRISTOPHER/Documents/Python%20Projects/Computer%20Vision%20Projects/ManiaPlayerV1.0/backups) | Dedicated folder storing timestamped safety backups created whenever calibrations are saved. |
 | [`presets/`](file:///c:/Users/CHRISTOPHER/Documents/Python%20Projects/Computer%20Vision%20Projects/ManiaPlayerV1.0/presets) | Collection of preset configurations for different skins, scroll speeds, key counts, and layouts. |
 | [`mania_config.json`](file:///c:/Users/CHRISTOPHER/Documents/Python%20Projects/Computer%20Vision%20Projects/ManiaPlayerV1.0/mania_config.json) | Central JSON configuration file for the Python application and GUI. |
@@ -227,13 +229,13 @@ pip install pillow mss pynput opencv-python
 
 ## 🔨 Compiling Native C Engine
 
-To recompile `maniaplayer.c` into `maniaplayer.exe`:
+To recompile `maniaplayer.c` into `maniaplayer_native.exe`:
 ```powershell
 .\build.bat
 ```
 Or execute GCC directly:
 ```powershell
-gcc -O3 -march=native -Wall -o maniaplayer.exe maniaplayer.c -lgdi32 -luser32
+gcc -O3 -s -march=native -Wall -o maniaplayer_native.exe maniaplayer.c -lgdi32 -luser32
 ```
 
 ---

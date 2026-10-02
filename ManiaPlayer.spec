@@ -10,9 +10,9 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['cv2'],
+    excludes=['cv2', 'numpy', 'scipy', 'matplotlib', 'pandas', 'unittest', 'test', 'email', 'http', 'html', 'urllib', 'xml', 'xmlrpc'],
     noarchive=False,
-    optimize=0,
+    optimize=2,
 )
 pyz = PYZ(a.pure)
 
@@ -22,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='ManiaPlayerGUI',
+    name='maniaplayer',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
