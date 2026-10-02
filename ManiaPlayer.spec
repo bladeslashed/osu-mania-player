@@ -5,7 +5,7 @@ a = Analysis(
     ['mania_gui.py'],
     pathex=[],
     binaries=[],
-    datas=[('mania_harness.py', '.')],
+    datas=[('mania_harness.py', '.'), ('maniaplayer.py', '.')],
     hiddenimports=['cv2', 'mss', 'PIL', 'pynput', 'tkinter', 'json'],
     hookspath=[],
     hooksconfig={},

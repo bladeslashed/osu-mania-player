@@ -32,14 +32,16 @@ SCREENPATH = SCREENSHOT_PATH
 # -------------------------------------------------------------
 JUDGEMENENT_LINE = 0
 LANE1 = 39
-LANE2 = 215
-LANE3 = 353
-LANE4 = 502
-BBOX = (677, 953, 1225, 954)
+LANE2 = 411
+LANE3 = 456
+LANE4 = 479
+LANES = [39, 411, 456, 479]
+BBOX = (677, 943, 1225, 944)
 KEY1 = "q"
-KEY2 = "w"
-KEY3 = "["
+KEY2 = "k"
+KEY3 = "k"
 KEY4 = "]"
+KEYS = ["q", "k", "k", "]"]
 
 p_status = True
 is_running = False
@@ -47,7 +49,7 @@ is_running = False
 # Default preset configuration
 DEFAULT_CONFIG = {
     "preset_name": "WhiteCat Skin 23 Speed (Default)",
-    "bbox": [677, 953, 1225, 954],
+    "bbox": [677, 943, 1225, 944],
     "judgement_line": 0,
     "global_threshold": 30,
     "lanes": [
@@ -63,7 +65,6 @@ DEFAULT_CONFIG = {
     "hotkeys": {
         "start": "f",
         "stop": "s",
-        "screenshot": "d",
         "menu": "m",
         "exit": "/"
     }
@@ -91,7 +92,7 @@ def key_to_str(key_obj):
 
 def load_config():
     """Loads configuration from mania_config.json if available, and synchronizes module globals."""
-    global BBOX, JUDGEMENENT_LINE, LANE1, LANE2, LANE3, LANE4, KEY1, KEY2, KEY3, KEY4
+    global BBOX, JUDGEMENENT_LINE, LANE1, LANE2, LANE3, LANE4, KEY1, KEY2, KEY3, KEY4, LANES, KEYS
     config = dict(DEFAULT_CONFIG)
     if CONFIG_PATH.exists():
         try:
@@ -106,15 +107,18 @@ def load_config():
         BBOX = tuple(int(x) for x in raw_bbox)
     JUDGEMENENT_LINE = int(config.get("judgement_line", 0))
     lanes = config.get("lanes", [])
-    if len(lanes) >= 4:
-        LANE1 = int(lanes[0].get("x", 39))
-        LANE2 = int(lanes[1].get("x", 215))
-        LANE3 = int(lanes[2].get("x", 353))
-        LANE4 = int(lanes[3].get("x", 502))
-        KEY1 = str(lanes[0].get("key", "q"))
-        KEY2 = str(lanes[1].get("key", "w"))
-        KEY3 = str(lanes[2].get("key", "["))
-        KEY4 = str(lanes[3].get("key", "]"))
+    if lanes:
+        LANES = [int(l.get("x", 0)) for l in lanes]
+        KEYS = [str(l.get("key", "a")).lower() for l in lanes]
+        for i, l in enumerate(lanes[:4]):
+            if i == 0:
+                LANE1, KEY1 = int(l.get("x", 39)), str(l.get("key", "q"))
+            elif i == 1:
+                LANE2, KEY2 = int(l.get("x", 215)), str(l.get("key", "w"))
+            elif i == 2:
+                LANE3, KEY3 = int(l.get("x", 353)), str(l.get("key", "["))
+            elif i == 3:
+                LANE4, KEY4 = int(l.get("x", 502)), str(l.get("key", "]"))
 
     return config
 
@@ -207,7 +211,7 @@ class ManiaPlayer:
         try:
             char = getattr(key, "char", None)
             if not char:
-                # Also handle F1..F4 keys
+                # Also handle F1, F2, F4 keys
                 if key == Key.f1:
                     if not self.is_running:
                         print("\n[>> START] Mania Player active! Tracking notes...")
@@ -217,8 +221,6 @@ class ManiaPlayer:
                         print("\n[|| STOP] Mania Player paused.")
                         self.is_running = False
                         self.release_all_keys()
-                elif key == Key.f3:
-                    self.take_screenshot()
                 elif key == Key.f4:
                     print("\n[XX EXIT] Exiting Mania Player...")
                     self.is_running = False
@@ -236,9 +238,6 @@ class ManiaPlayer:
                     print("\n[|| STOP] Mania Player paused.")
                     self.is_running = False
                     self.release_all_keys()
-
-            elif char == hotkeys.get("screenshot", "d"):
-                self.take_screenshot()
 
             elif char == hotkeys.get("menu", "m"):
                 print("\n[Menu] Returning to Configuration Menu...")
@@ -371,7 +370,6 @@ class ManiaPlayer:
         print("  Hotkeys:")
         print(f"    [F1 / F] Start Tracking")
         print(f"    [F2 / S] Stop / Pause")
-        print(f"    [F3 / D] Capture Calibration Screenshot")
         print(f"    [M]      Return to Settings Menu")
         print(f"    [F4 / /] Exit Program")
         print("=======================================================\n")
@@ -392,22 +390,11 @@ class ManiaPlayer:
 # Standalone classic functions for backward-compatibility
 def click(img, keyboard):
     px = img.load()
-    if sum(px[LANE1, JUDGEMENENT_LINE]) / 3 > 30:
-        keyboard.press(KEY1)
-    else:
-        keyboard.release(KEY1)
-    if sum(px[LANE2, JUDGEMENENT_LINE]) / 3 > 30:
-        keyboard.press(KEY2)
-    else:
-        keyboard.release(KEY2)
-    if sum(px[LANE3, JUDGEMENENT_LINE]) / 3 > 30:
-        keyboard.press(KEY3)
-    else:
-        keyboard.release(KEY3)
-    if sum(px[LANE4, JUDGEMENENT_LINE]) / 3 > 30:
-        keyboard.press(KEY4)
-    else:
-        keyboard.release(KEY4)
+    for lx, k in zip(LANES, KEYS):
+        if sum(px[lx, JUDGEMENENT_LINE]) / 3 > 30:
+            keyboard.press(k)
+        else:
+            keyboard.release(k)
 
 
 def get_ss(keyboard):

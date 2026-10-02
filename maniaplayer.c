@@ -5,7 +5,7 @@
 #include <string.h>
 #include <stdbool.h>
 
-#define MAX_LANES 16
+#define MAX_LANES 32
 #define CONFIG_FILE "settings.json"
 #define SCREENSHOT_FILE "Screenshot.bmp"
 

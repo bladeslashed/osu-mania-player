@@ -56,6 +56,8 @@ def find_target_script() -> Path:
         base_dir / "Pre Vibecoded" / "maniaplayer.py",
         base_dir.parent / "Pre Vibecoded" / "maniaplayer.py",
     ]
+    if hasattr(sys, "_MEIPASS"):
+        candidates.append(Path(sys._MEIPASS) / "maniaplayer.py")
 
     for p in candidates:
         if p and p.exists():
@@ -99,8 +101,8 @@ class ModernManiaApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("osu!mania Player Pro V1.0")
-        self.root.geometry("520x660")
-        self.root.minsize(480, 600)
+        self.root.geometry("540x680")
+        self.root.minsize(500, 620)
         self.root.configure(bg="#0f172a")
 
         # Global input controller
@@ -110,24 +112,58 @@ class ModernManiaApp:
         self.is_running = False
         self.p_status = True
         self.bot_thread = None
-        self.stay_on_top = tk.BooleanVar(value=True)
-        self.root.attributes("-topmost", True)
+
+        # Window not always on top by default to prevent awkward maneuvering
+        self.stay_on_top = tk.BooleanVar(value=False)
+        self.root.attributes("-topmost", False)
 
         # Active calibration coordinates & keybinds
         self.active_bbox = getattr(maniaplayer, "BBOX", (677, 953, 1225, 954))
         self.active_jl = getattr(maniaplayer, "JUDGEMENENT_LINE", 0)
-        self.active_lanes = [
-            getattr(maniaplayer, "LANE1", 39),
-            getattr(maniaplayer, "LANE2", 215),
-            getattr(maniaplayer, "LANE3", 353),
-            getattr(maniaplayer, "LANE4", 502),
-        ]
-        self.active_keys = [
-            str(getattr(maniaplayer, "KEY1", "q")).lower(),
-            str(getattr(maniaplayer, "KEY2", "w")).lower(),
-            str(getattr(maniaplayer, "KEY3", "[")).lower(),
-            str(getattr(maniaplayer, "KEY4", "]")).lower(),
-        ]
+
+        # Dynamic Key count (1 to 20 keys)
+        self.key_count = 4
+        self.active_lanes = [39, 215, 353, 502]
+        self.active_keys = ["q", "w", "[", "]"]
+
+        # Load initial config from mania_config.json if available
+        base_dir = get_base_dir()
+        cfg_file = base_dir / "mania_config.json"
+        if not cfg_file.exists():
+            cfg_file = Path.cwd() / "mania_config.json"
+        if cfg_file.exists():
+            try:
+                cfg_data = json.loads(cfg_file.read_text(encoding="utf-8"))
+                c_bbox = cfg_data.get("bbox")
+                if c_bbox and len(c_bbox) == 4:
+                    self.active_bbox = tuple(int(x) for x in c_bbox)
+                self.active_jl = int(cfg_data.get("judgement_line", self.active_jl))
+                c_lanes = cfg_data.get("lanes", [])
+                if c_lanes:
+                    self.key_count = min(20, max(1, len(c_lanes)))
+                    self.active_lanes = [int(l.get("x", 0)) for l in c_lanes[:self.key_count]]
+                    self.active_keys = [str(l.get("key", "q")).lower() for l in c_lanes[:self.key_count]]
+            except Exception:
+                pass
+        else:
+            if hasattr(maniaplayer, "LANES") and hasattr(maniaplayer, "KEYS"):
+                self.key_count = min(20, max(1, len(maniaplayer.LANES)))
+                self.active_lanes = list(maniaplayer.LANES[:self.key_count])
+                self.active_keys = [str(k).lower() for k in maniaplayer.KEYS[:self.key_count]]
+            else:
+                self.active_lanes = [
+                    getattr(maniaplayer, "LANE1", 39),
+                    getattr(maniaplayer, "LANE2", 215),
+                    getattr(maniaplayer, "LANE3", 353),
+                    getattr(maniaplayer, "LANE4", 502),
+                ]
+                self.active_keys = [
+                    str(getattr(maniaplayer, "KEY1", "q")).lower(),
+                    str(getattr(maniaplayer, "KEY2", "w")).lower(),
+                    str(getattr(maniaplayer, "KEY3", "[")).lower(),
+                    str(getattr(maniaplayer, "KEY4", "]")).lower(),
+                ]
+
         self.config_updated = False
 
         # Live telemetry
@@ -135,7 +171,7 @@ class ModernManiaApp:
         self.loop_count = 0
         self.last_fps_time = time.time()
         self.current_fps = 0.0
-        self.lane_states = [False, False, False, False]  # L1, L2, L3, L4
+        self.lane_states = [False] * self.key_count
 
         # Build UI layout
         self._build_ui()
@@ -218,36 +254,54 @@ class ModernManiaApp:
         )
         self.btn_toggle.pack(side=tk.TOP, fill=tk.X, padx=12, pady=6)
 
-        # 4. Lane State Visualizer
-        lbl_vis_title = tk.Label(
-            self.root, text="LIVE 4-KEY LANE DETECTOR",
-            bg="#0f172a", fg="#64748b", font=("Segoe UI", 8, "bold"), anchor="w"
-        )
-        lbl_vis_title.pack(side=tk.TOP, fill=tk.X, padx=14, pady=(8, 4))
+        # 4. Lane State Visualizer Header & Dynamic Key Count Selector (1 to 20 Keys)
+        vis_header = tk.Frame(self.root, bg="#0f172a")
+        vis_header.pack(side=tk.TOP, fill=tk.X, padx=14, pady=(8, 4))
 
-        lanes_box = tk.Frame(self.root, bg="#0f172a")
-        lanes_box.pack(side=tk.TOP, fill=tk.X, padx=12, pady=(0, 6))
+        self.lbl_vis_title = tk.Label(
+            vis_header, text=f"LIVE {self.key_count}-KEY LANE DETECTOR",
+            bg="#0f172a", fg="#64748b", font=("Segoe UI", 8, "bold")
+        )
+        self.lbl_vis_title.pack(side=tk.LEFT)
+
+        kc_box = tk.Frame(vis_header, bg="#0f172a")
+        kc_box.pack(side=tk.RIGHT)
+
+        tk.Label(kc_box, text="Keys (1-20):", bg="#0f172a", fg="#94a3b8", font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(0, 3))
+
+        btn_dec = tk.Button(
+            kc_box, text="−", bg="#1e293b", fg="white", activebackground="#334155",
+            font=("Consolas", 8, "bold"), relief="flat", padx=4, pady=0, cursor="hand2",
+            command=lambda: self.set_key_count(self.key_count - 1)
+        )
+        btn_dec.pack(side=tk.LEFT, padx=1)
+
+        self.lbl_key_badge = tk.Label(
+            kc_box, text=f"{self.key_count}K", bg="#1e293b", fg="#38bdf8",
+            font=("Segoe UI", 8, "bold"), width=4
+        )
+        self.lbl_key_badge.pack(side=tk.LEFT, padx=1)
+
+        btn_inc = tk.Button(
+            kc_box, text="+", bg="#1e293b", fg="white", activebackground="#334155",
+            font=("Consolas", 8, "bold"), relief="flat", padx=4, pady=0, cursor="hand2",
+            command=lambda: self.set_key_count(self.key_count + 1)
+        )
+        btn_inc.pack(side=tk.LEFT, padx=1)
+
+        for qk in (4, 7, 8, 10):
+            btn_qk = tk.Button(
+                kc_box, text=f"{qk}K", bg="#1e293b", fg="#cbd5e1", activebackground="#334155",
+                font=("Segoe UI", 7), relief="flat", padx=3, pady=0, cursor="hand2",
+                command=lambda val=qk: self.set_key_count(val)
+            )
+            btn_qk.pack(side=tk.LEFT, padx=1)
+
+        self.lanes_box = tk.Frame(self.root, bg="#0f172a")
+        self.lanes_box.pack(side=tk.TOP, fill=tk.X, padx=12, pady=(0, 6))
 
         self.lane_pads = []
-        lane_labels = [("Lane 1", self.active_keys[0].upper(), "#38bdf8"),
-                       ("Lane 2", self.active_keys[1].upper(), "#4ade80"),
-                       ("Lane 3", self.active_keys[2].upper(), "#fb923c"),
-                       ("Lane 4", self.active_keys[3].upper(), "#c084fc")]
-
-        for i, (name, key, color) in enumerate(lane_labels):
-            pad = tk.Frame(lanes_box, bg="#1e293b", padx=6, pady=8, highlightthickness=1, highlightbackground="#334155")
-            pad.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
-
-            l_name = tk.Label(pad, text=name, bg="#1e293b", fg="#94a3b8", font=("Segoe UI", 8))
-            l_name.pack()
-
-            l_key = tk.Label(pad, text=key, bg="#1e293b", fg=color, font=("Segoe UI", 14, "bold"))
-            l_key.pack(pady=2)
-
-            l_state = tk.Label(pad, text="OFF", bg="#1e293b", fg="#64748b", font=("Segoe UI", 8, "bold"))
-            l_state.pack()
-
-            self.lane_pads.append((pad, l_name, l_key, l_state, color))
+        self._rebuild_lane_visualizer()
 
         # 5. Configuration Display Card
         cfg_frame = tk.LabelFrame(
@@ -268,23 +322,16 @@ class ModernManiaApp:
         self.lbl_cfg_jl = tk.Label(cfg_frame, text="Judgement Line: --", bg="#0f172a", fg="#cbd5e1", font=("Consolas", 8), anchor="w")
         self.lbl_cfg_jl.pack(fill=tk.X, pady=1)
 
-        # 6. Quick Controls & Actions
+        # 6. Quick Controls & Actions (Exit)
         action_bar = tk.Frame(self.root, bg="#0f172a")
         action_bar.pack(side=tk.TOP, fill=tk.X, padx=12, pady=4)
 
-        btn_screenshot = tk.Button(
-            action_bar, text="📸 Screenshot (F3)", bg="#334155", fg="white",
-            activebackground="#475569", activeforeground="white", font=("Segoe UI", 9),
-            relief="flat", padx=10, pady=5, cursor="hand2", command=self.take_screenshot
-        )
-        btn_screenshot.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 3))
-
         btn_quit = tk.Button(
-            action_bar, text="❌ Exit (F4)", bg="#334155", fg="#f87171",
-            activebackground="#475569", activeforeground="#f87171", font=("Segoe UI", 9),
-            relief="flat", padx=10, pady=5, cursor="hand2", command=self.on_close
+            action_bar, text="❌ Exit Application (F4)", bg="#334155", fg="#f87171",
+            activebackground="#475569", activeforeground="#f87171", font=("Segoe UI", 9, "bold"),
+            relief="flat", padx=10, pady=6, cursor="hand2", command=self.on_close
         )
-        btn_quit.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(3, 0))
+        btn_quit.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         # 7. Bottom Bar with Calibration Button & Always on top
         bot_bar = tk.Frame(self.root, bg="#0f172a")
@@ -311,37 +358,176 @@ class ModernManiaApp:
         )
         btn_reload.pack(side=tk.RIGHT, padx=4)
 
+    def _rebuild_lane_visualizer(self):
+        for widget in self.lanes_box.winfo_children():
+            widget.destroy()
+
+        self.lane_pads = []
+        count = self.key_count
+
+        if count <= 10:
+            row_frame = tk.Frame(self.lanes_box, bg="#0f172a")
+            row_frame.pack(side=tk.TOP, fill=tk.X)
+
+            pad_padx = 6 if count <= 4 else (4 if count <= 7 else 2)
+            pad_pady = 8 if count <= 4 else 5
+            font_sz = 14 if count <= 4 else (11 if count <= 7 else 9)
+
+            for i in range(count):
+                color = mania_harness.get_lane_color(i)
+                key_text = self.active_keys[i].upper() if i < len(self.active_keys) else f"K{i+1}"
+                pad = tk.Frame(row_frame, bg="#1e293b", padx=pad_padx, pady=pad_pady, highlightthickness=1, highlightbackground="#334155")
+                pad.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
+
+                l_name = tk.Label(pad, text=f"L{i+1}", bg="#1e293b", fg="#94a3b8", font=("Segoe UI", 7))
+                l_name.pack()
+
+                l_key = tk.Label(pad, text=key_text, bg="#1e293b", fg=color, font=("Segoe UI", font_sz, "bold"))
+                l_key.pack(pady=1)
+
+                l_state = tk.Label(pad, text="OFF", bg="#1e293b", fg="#64748b", font=("Segoe UI", 7, "bold"))
+                l_state.pack()
+
+                self.lane_pads.append((pad, l_name, l_key, l_state, color))
+        else:
+            mid = (count + 1) // 2
+            row1 = tk.Frame(self.lanes_box, bg="#0f172a")
+            row1.pack(side=tk.TOP, fill=tk.X, pady=1)
+            row2 = tk.Frame(self.lanes_box, bg="#0f172a")
+            row2.pack(side=tk.TOP, fill=tk.X, pady=1)
+
+            for i in range(count):
+                parent_row = row1 if i < mid else row2
+                color = mania_harness.get_lane_color(i)
+                key_text = self.active_keys[i].upper() if i < len(self.active_keys) else f"K{i+1}"
+                pad = tk.Frame(parent_row, bg="#1e293b", padx=2, pady=3, highlightthickness=1, highlightbackground="#334155")
+                pad.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=1)
+
+                l_name = tk.Label(pad, text=f"L{i+1}", bg="#1e293b", fg="#94a3b8", font=("Segoe UI", 6))
+                l_name.pack()
+
+                l_key = tk.Label(pad, text=key_text, bg="#1e293b", fg=color, font=("Segoe UI", 8, "bold"))
+                l_key.pack(pady=0)
+
+                l_state = tk.Label(pad, text="OFF", bg="#1e293b", fg="#64748b", font=("Segoe UI", 6, "bold"))
+                l_state.pack()
+
+                self.lane_pads.append((pad, l_name, l_key, l_state, color))
+
+    def set_key_count(self, new_count: int, lanes=None, keys=None):
+        new_count = max(1, min(20, int(new_count)))
+        old_count = self.key_count
+        self.key_count = new_count
+
+        if hasattr(self, "lbl_vis_title"):
+            self.lbl_vis_title.config(text=f"LIVE {new_count}-KEY LANE DETECTOR")
+        if hasattr(self, "lbl_key_badge"):
+            self.lbl_key_badge.config(text=f"{new_count}K")
+
+        w = max(1, self.active_bbox[2] - self.active_bbox[0])
+
+        if lanes is not None and len(lanes) >= new_count:
+            self.active_lanes = [int(x) for x in lanes[:new_count]]
+        else:
+            if new_count > len(self.active_lanes):
+                for i in range(len(self.active_lanes), new_count):
+                    self.active_lanes.append(int((w / new_count) * (i + 0.5)))
+            elif new_count < len(self.active_lanes):
+                self.active_lanes = self.active_lanes[:new_count]
+
+        if keys is not None and len(keys) >= new_count:
+            self.active_keys = [str(k).lower().strip() for k in keys[:new_count]]
+        else:
+            if new_count in mania_harness.DEFAULT_KEY_LAYOUTS and (old_count != new_count or len(self.active_keys) != new_count):
+                layout = mania_harness.DEFAULT_KEY_LAYOUTS[new_count]
+                updated = list(self.active_keys[:new_count])
+                while len(updated) < new_count:
+                    idx = len(updated)
+                    if idx < len(layout):
+                        updated.append(layout[idx])
+                    elif idx < len(mania_harness.ALL_20_KEYS):
+                        updated.append(mania_harness.ALL_20_KEYS[idx])
+                    else:
+                        updated.append(f"k{idx+1}")
+                self.active_keys = updated[:new_count]
+            else:
+                while len(self.active_keys) < new_count:
+                    idx = len(self.active_keys)
+                    if idx < len(mania_harness.ALL_20_KEYS):
+                        self.active_keys.append(mania_harness.ALL_20_KEYS[idx])
+                    else:
+                        self.active_keys.append(f"k{idx+1}")
+                self.active_keys = self.active_keys[:new_count]
+
+        self.lane_states = [False] * new_count
+        self.config_updated = True
+
+        if hasattr(self, "lanes_box"):
+            self._rebuild_lane_visualizer()
+        self._sync_with_maniaplayer()
+        self._save_active_config()
+
+    def _save_active_config(self):
+        base_dir = get_base_dir()
+        cfg_file = base_dir / "mania_config.json"
+        try:
+            cfg = {}
+            if cfg_file.exists():
+                try:
+                    cfg = json.loads(cfg_file.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+            cfg["bbox"] = list(self.active_bbox)
+            cfg["judgement_line"] = self.active_jl
+            cfg["key_count"] = self.key_count
+            cfg["lanes"] = [
+                {
+                    "name": f"Lane {i+1}",
+                    "x": self.active_lanes[i],
+                    "key": self.active_keys[i],
+                    "threshold": 30
+                }
+                for i in range(self.key_count)
+            ]
+            cfg_file.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+            settings_file = base_dir / "settings.json"
+            s_data = {
+                "bbox": list(self.active_bbox),
+                "judgement_line": self.active_jl,
+                "global_threshold": 30,
+                "input_mode": "hold",
+                "lanes": cfg["lanes"]
+            }
+            settings_file.write_text(json.dumps(s_data, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
     def _sync_with_maniaplayer(self):
         if not LOADED_MANIA:
             self.lbl_cfg_bbox.config(text=f"Error loading script: {load_error}")
             return
 
-        bbox = getattr(maniaplayer, "BBOX", self.active_bbox)
-        l1 = getattr(maniaplayer, "LANE1", self.active_lanes[0])
-        l2 = getattr(maniaplayer, "LANE2", self.active_lanes[1])
-        l3 = getattr(maniaplayer, "LANE3", self.active_lanes[2])
-        l4 = getattr(maniaplayer, "LANE4", self.active_lanes[3])
-        jl = getattr(maniaplayer, "JUDGEMENENT_LINE", self.active_jl)
+        if LOADED_MANIA and maniaplayer:
+            bbox = getattr(maniaplayer, "BBOX", self.active_bbox)
+            jl = getattr(maniaplayer, "JUDGEMENENT_LINE", self.active_jl)
+            self.active_bbox = bbox
+            self.active_jl = jl
 
-        k1 = str(getattr(maniaplayer, "KEY1", self.active_keys[0])).lower()
-        k2 = str(getattr(maniaplayer, "KEY2", self.active_keys[1])).lower()
-        k3 = str(getattr(maniaplayer, "KEY3", self.active_keys[2])).lower()
-        k4 = str(getattr(maniaplayer, "KEY4", self.active_keys[3])).lower()
+        w = self.active_bbox[2] - self.active_bbox[0]
+        h = self.active_bbox[3] - self.active_bbox[1]
+        self.lbl_cfg_file.config(text=f"Source: {TARGET_SCRIPT.name} ({self.key_count} Keys)")
+        self.lbl_cfg_bbox.config(text=f"BBOX: {self.active_bbox} ({w}x{h} px)")
 
-        self.active_bbox = bbox
-        self.active_jl = jl
-        self.active_lanes = [l1, l2, l3, l4]
-        self.active_keys = [k1, k2, k3, k4]
+        if self.key_count <= 6:
+            lanes_str = " | ".join(f"L{i+1}: {self.active_lanes[i]} [{self.active_keys[i].upper()}]" for i in range(self.key_count))
+        else:
+            keys_preview = " ".join(f"[{k.upper()}]" for k in self.active_keys[:self.key_count])
+            lanes_str = f"{self.key_count} Keys: {keys_preview}"
+        self.lbl_cfg_lanes.config(text=lanes_str)
+        self.lbl_cfg_jl.config(text=f"JUDGEMENENT_LINE: {self.active_jl}")
 
-        w = bbox[2] - bbox[0]
-        h = bbox[3] - bbox[1]
-        self.lbl_cfg_file.config(text=f"Source: {TARGET_SCRIPT.name}")
-        self.lbl_cfg_bbox.config(text=f"BBOX: {bbox} ({w}x{h} px)")
-        self.lbl_cfg_lanes.config(text=f"L1: {l1} [{k1.upper()}] | L2: {l2} [{k2.upper()}] | L3: {l3} [{k3.upper()}] | L4: {l4} [{k4.upper()}]")
-        self.lbl_cfg_jl.config(text=f"JUDGEMENENT_LINE: {jl}")
-
-        # Update lane visualizer pads
-        for i in range(4):
+        for i in range(min(len(self.lane_pads), self.key_count)):
             self.lane_pads[i][2].config(text=self.active_keys[i].upper())
 
     def _toggle_topmost(self):
@@ -357,38 +543,42 @@ class ModernManiaApp:
 
     def on_calibrator_update(self, bbox, judgement_line, lanes, keys=None):
         """Callback invoked when Calibrator saves or applies new coordinates or keys."""
+        new_count = len(lanes)
         if LOADED_MANIA and maniaplayer:
             try:
                 maniaplayer.BBOX = bbox
                 maniaplayer.JUDGEMENENT_LINE = judgement_line
-                maniaplayer.LANE1 = lanes[0]
-                maniaplayer.LANE2 = lanes[1]
-                maniaplayer.LANE3 = lanes[2]
-                maniaplayer.LANE4 = lanes[3]
-                if keys and len(keys) >= 4:
-                    maniaplayer.KEY1 = str(keys[0]).lower()
-                    maniaplayer.KEY2 = str(keys[1]).lower()
-                    maniaplayer.KEY3 = str(keys[2]).lower()
-                    maniaplayer.KEY4 = str(keys[3]).lower()
+                maniaplayer.LANES = list(lanes)
+                if keys:
+                    maniaplayer.KEYS = [str(k).lower() for k in keys]
+                for i in range(min(4, len(lanes))):
+                    setattr(maniaplayer, f"LANE{i+1}", lanes[i])
+                    if keys and i < len(keys):
+                        setattr(maniaplayer, f"KEY{i+1}", str(keys[i]).lower())
             except Exception:
                 pass
 
         self.active_bbox = bbox
         self.active_jl = judgement_line
-        self.active_lanes = list(lanes)
-        if keys and len(keys) >= 4:
-            self.active_keys = [str(k).lower() for k in keys]
+
+        if new_count != self.key_count:
+            self.set_key_count(new_count, lanes=lanes, keys=keys)
+        else:
+            self.active_lanes = list(lanes)
+            if keys:
+                self.active_keys = [str(k).lower() for k in keys]
+            self._rebuild_lane_visualizer()
+            self._sync_with_maniaplayer()
 
         self.config_updated = True
-        self._sync_with_maniaplayer()
-
         keys_str = "/".join(self.active_keys).upper()
-        self.lbl_status_sub.config(text=f"Updated: BBOX {bbox} | Keys: {keys_str}")
+        self.lbl_status_sub.config(text=f"Updated: {self.key_count} Keys [{keys_str}] | BBOX {bbox}")
+
 
     def open_calibrator(self):
         calib_win = tk.Toplevel(self.root)
         calib_win.lift()
-        calib_win.attributes("-topmost", True)
+        calib_win.attributes("-topmost", False)
 
         base_dir = get_base_dir()
         target_file = base_dir / "maniaplayer.py"
@@ -463,19 +653,16 @@ class ModernManiaApp:
                 self.keyboard.release(k)
             except Exception:
                 pass
-        for k in ['q', 'w', '[', ']']:
-            try:
-                self.keyboard.release(k)
-            except Exception:
-                pass
-        self.lane_states = [False, False, False, False]
+        self.lane_states = [False] * self.key_count
 
     def _bot_worker(self):
-        """Ultra-fast capture worker achieving 60-240+ FPS with dynamic coordinate & key reloading."""
+        """Ultra-fast capture worker achieving 60-240+ FPS with dynamic coordinate & key reloading (1-20 keys)."""
         jl = self.active_jl
-        l1, l2, l3, l4 = self.active_lanes
-        k1, k2, k3, k4 = self.active_keys
+        lanes = list(self.active_lanes)
+        keys = list(self.active_keys)
         bbox = self.active_bbox
+        num_lanes = len(lanes)
+        pressed_states = [False] * num_lanes
 
         if HAS_MSS:
             try:
@@ -489,21 +676,20 @@ class ModernManiaApp:
                     }
                     w = monitor["width"]
                     h = monitor["height"]
-                    jl_clamp = min(jl, h - 1)
+                    jl_clamp = min(max(0, jl), h - 1)
                     stride = w * 4
-                    off1 = (jl_clamp * stride) + (min(l1, w - 1) * 4)
-                    off2 = (jl_clamp * stride) + (min(l2, w - 1) * 4)
-                    off3 = (jl_clamp * stride) + (min(l3, w - 1) * 4)
-                    off4 = (jl_clamp * stride) + (min(l4, w - 1) * 4)
+                    offsets = [(jl_clamp * stride) + (min(max(0, lx), w - 1) * 4) for lx in lanes]
 
                     while self.is_running and self.p_status:
-                        # Check dynamic updates from calibrator
+                        # Check dynamic updates from calibrator or GUI
                         if self.config_updated or current_bbox != self.active_bbox:
                             bbox = self.active_bbox
                             current_bbox = bbox
                             jl = self.active_jl
-                            l1, l2, l3, l4 = self.active_lanes
-                            k1, k2, k3, k4 = self.active_keys
+                            lanes = list(self.active_lanes)
+                            keys = list(self.active_keys)
+                            num_lanes = len(lanes)
+                            pressed_states = [False] * num_lanes
                             monitor = {
                                 "left": bbox[0],
                                 "top": bbox[1],
@@ -512,43 +698,36 @@ class ModernManiaApp:
                             }
                             w = monitor["width"]
                             h = monitor["height"]
-                            jl_clamp = min(jl, h - 1)
+                            jl_clamp = min(max(0, jl), h - 1)
                             stride = w * 4
-                            off1 = (jl_clamp * stride) + (min(l1, w - 1) * 4)
-                            off2 = (jl_clamp * stride) + (min(l2, w - 1) * 4)
-                            off3 = (jl_clamp * stride) + (min(l3, w - 1) * 4)
-                            off4 = (jl_clamp * stride) + (min(l4, w - 1) * 4)
+                            offsets = [(jl_clamp * stride) + (min(max(0, lx), w - 1) * 4) for lx in lanes]
                             self.config_updated = False
 
                         shot = sct.grab(monitor)
                         raw = shot.raw
 
-                        hit1 = (raw[off1 + 2] + raw[off1 + 1] + raw[off1]) > 90
-                        hit2 = (raw[off2 + 2] + raw[off2 + 1] + raw[off2]) > 90
-                        hit3 = (raw[off3 + 2] + raw[off3 + 1] + raw[off3]) > 90
-                        hit4 = (raw[off4 + 2] + raw[off4 + 1] + raw[off4]) > 90
+                        current_hits = [False] * num_lanes
+                        for i in range(num_lanes):
+                            off = offsets[i]
+                            hit = (raw[off + 2] + raw[off + 1] + raw[off]) > 90
+                            current_hits[i] = hit
+                            k = keys[i]
+                            if hit:
+                                if not pressed_states[i]:
+                                    try:
+                                        self.keyboard.press(k)
+                                    except Exception:
+                                        pass
+                                    pressed_states[i] = True
+                            else:
+                                if pressed_states[i]:
+                                    try:
+                                        self.keyboard.release(k)
+                                    except Exception:
+                                        pass
+                                    pressed_states[i] = False
 
-                        if hit1:
-                            self.keyboard.press(k1)
-                        else:
-                            self.keyboard.release(k1)
-
-                        if hit2:
-                            self.keyboard.press(k2)
-                        else:
-                            self.keyboard.release(k2)
-
-                        if hit3:
-                            self.keyboard.press(k3)
-                        else:
-                            self.keyboard.release(k3)
-
-                        if hit4:
-                            self.keyboard.press(k4)
-                        else:
-                            self.keyboard.release(k4)
-
-                        self.lane_states = [hit1, hit2, hit3, hit4]
+                        self.lane_states = current_hits
                         self.loop_count += 1
                     return
             except Exception:
@@ -560,65 +739,47 @@ class ModernManiaApp:
                 if self.config_updated:
                     bbox = self.active_bbox
                     jl = self.active_jl
-                    l1, l2, l3, l4 = self.active_lanes
-                    k1, k2, k3, k4 = self.active_keys
+                    lanes = list(self.active_lanes)
+                    keys = list(self.active_keys)
+                    num_lanes = len(lanes)
+                    pressed_states = [False] * num_lanes
                     self.config_updated = False
 
                 check = ImageGrab.grab(bbox=bbox)
                 px = check.load()
 
-                hit1 = sum(px[l1, jl]) / 3 > 30
-                if hit1:
-                    self.keyboard.press(k1)
-                else:
-                    self.keyboard.release(k1)
+                current_hits = [False] * num_lanes
+                w = max(1, bbox[2] - bbox[0])
+                h = max(1, bbox[3] - bbox[1])
+                jl_clamp = min(max(0, jl), h - 1)
 
-                hit2 = sum(px[l2, jl]) / 3 > 30
-                if hit2:
-                    self.keyboard.press(k2)
-                else:
-                    self.keyboard.release(k2)
+                for i in range(num_lanes):
+                    lx = min(max(0, lanes[i]), w - 1)
+                    hit = sum(px[lx, jl_clamp][:3]) / 3 > 30
+                    current_hits[i] = hit
+                    k = keys[i]
+                    if hit:
+                        if not pressed_states[i]:
+                            try:
+                                self.keyboard.press(k)
+                            except Exception:
+                                pass
+                            pressed_states[i] = True
+                    else:
+                        if pressed_states[i]:
+                            try:
+                                self.keyboard.release(k)
+                            except Exception:
+                                pass
+                            pressed_states[i] = False
 
-                hit3 = sum(px[l3, jl]) / 3 > 30
-                if hit3:
-                    self.keyboard.press(k3)
-                else:
-                    self.keyboard.release(k3)
-
-                hit4 = sum(px[l4, jl]) / 3 > 30
-                if hit4:
-                    self.keyboard.press(k4)
-                else:
-                    self.keyboard.release(k4)
-
-                self.lane_states = [hit1, hit2, hit3, hit4]
+                self.lane_states = current_hits
                 self.loop_count += 1
             except Exception:
                 pass
 
-    def take_screenshot(self):
-        try:
-            self.root.withdraw()
-            self.root.update()
-            time.sleep(0.25)
-            bbox = self.active_bbox
-            screen_path = TARGET_SCRIPT.parent / "Screenshot.png"
-            check = ImageGrab.grab(bbox=bbox)
-            check.save(str(screen_path))
-            self.lbl_status_sub.config(text=f"Screenshot saved to {screen_path.name}!")
-        except Exception as e:
-            messagebox.showerror("Screenshot Error", str(e))
-        finally:
-            self.root.deiconify()
-            self.root.lift()
-            if self.stay_on_top.get():
-                try:
-                    self.root.attributes("-topmost", True)
-                except Exception:
-                    pass
-
     # -------------------------------------------------------------
-    # Global Hotkeys Listener (F1..F4)
+    # Global Hotkeys Listener (F1, F2, F4)
     # -------------------------------------------------------------
     def _start_global_hotkeys(self):
         def on_press(key):
@@ -627,8 +788,6 @@ class ModernManiaApp:
                     self.root.after(0, self.start_bot)
                 elif key == Key.f2:
                     self.root.after(0, self.stop_bot)
-                elif key == Key.f3:
-                    self.root.after(0, self.take_screenshot)
                 elif key == Key.f4:
                     self.root.after(0, self.on_close)
             except Exception:
@@ -651,7 +810,8 @@ class ModernManiaApp:
                 self.loop_count = 0
                 self.last_fps_time = now
 
-            for i in range(4):
+            n = min(len(self.lane_pads), len(self.lane_states))
+            for i in range(n):
                 pad, l_name, l_key, l_state, color = self.lane_pads[i]
                 active = self.lane_states[i]
                 if active:
@@ -672,6 +832,12 @@ class ModernManiaApp:
     def on_close(self):
         self.is_running = False
         self.p_status = False
+        if hasattr(self, 'keyboard') and hasattr(self, 'active_keys'):
+            for k in self.active_keys:
+                try:
+                    self.keyboard.release(k)
+                except Exception:
+                    pass
         if self.listener:
             try:
                 self.listener.stop()
