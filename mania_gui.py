@@ -584,13 +584,15 @@ class ModernManiaApp:
         target_file = base_dir / "maniaplayer.py"
         config_path = base_dir / "mania_config.json"
         presets_dir = base_dir / "presets"
+        backups_dir = base_dir / "backups"
 
         app = mania_harness.ManiaHarnessApp(
             calib_win,
             on_save_callback=self.on_calibrator_update,
             target_file=target_file,
             config_file=config_path,
-            presets_dir=presets_dir
+            presets_dir=presets_dir,
+            backups_dir=backups_dir
         )
 
         def on_calib_close():
