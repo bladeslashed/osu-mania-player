@@ -1,4 +1,4 @@
-# ManiaPlayer V1.0
+# ManiaPlayer V1.2
 
 ### CODED WITH ANTIGRAVITY, USER SUPPLIED BASE SCRIPT
 A high-performance, ultra-low-latency computer vision automation bot and visual calibration harness for **osu!mania** (supporting 1K through 20K modes).
