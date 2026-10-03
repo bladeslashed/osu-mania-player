@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import json
+import collections
 import threading
 from pathlib import Path
 from PIL import ImageGrab
@@ -21,27 +22,43 @@ except ImportError:
     HAS_MSS = False
     MSS_FACTORY = None
 
+# Enable 1ms timer precision on Windows
+if sys.platform == "win32":
+    try:
+        import ctypes
+        ctypes.windll.winmm.timeBeginPeriod(1)
+    except Exception:
+        pass
+
 FOLDER_PATH = Path(__file__).resolve().parent
 FOLDERPATH = FOLDER_PATH
 CONFIG_PATH = FOLDER_PATH / "mania_config.json"
 SCREENSHOT_PATH = FOLDER_PATH / "Screenshot.png"
 SCREENPATH = SCREENSHOT_PATH
 
+# Ensure required runtime folders exist
+(FOLDER_PATH / "presets").mkdir(parents=True, exist_ok=True)
+(FOLDER_PATH / "backups").mkdir(parents=True, exist_ok=True)
+(Path.cwd() / "presets").mkdir(parents=True, exist_ok=True)
+(Path.cwd() / "backups").mkdir(parents=True, exist_ok=True)
+
 # -------------------------------------------------------------
 # Calibrated coordinates (synced with mania_config.json & GUI)
 # -------------------------------------------------------------
 JUDGEMENENT_LINE = 0
-LANE1 = 39
-LANE2 = 411
-LANE3 = 456
-LANE4 = 479
-LANES = [39, 411, 456, 479]
-BBOX = (677, 943, 1225, 944)
+INPUT_DELAY_MS = 0
+DELAY_MS = 0
+LANE1 = 68
+LANE2 = 204
+LANE3 = 341
+LANE4 = 477
+LANES = [68, 204, 341, 477]
+BBOX = (680, 982, 1226, 983)
 KEY1 = "q"
-KEY2 = "k"
-KEY3 = "k"
+KEY2 = "w"
+KEY3 = "["
 KEY4 = "]"
-KEYS = ["q", "k", "k", "]"]
+KEYS = ["q", "w", "[", "]"]
 
 p_status = True
 is_running = False
@@ -49,8 +66,10 @@ is_running = False
 # Default preset configuration
 DEFAULT_CONFIG = {
     "preset_name": "WhiteCat Skin 23 Speed (Default)",
-    "bbox": [677, 943, 1225, 944],
+    "bbox": [680, 982, 1226, 983],
     "judgement_line": 0,
+    "input_delay_ms": 0,
+    "delay_ms": 0,
     "global_threshold": 30,
     "lanes": [
         {"name": "Lane 1", "x": 39, "key": "q", "threshold": 30},
@@ -92,7 +111,7 @@ def key_to_str(key_obj):
 
 def load_config():
     """Loads configuration from mania_config.json if available, and synchronizes module globals."""
-    global BBOX, JUDGEMENENT_LINE, LANE1, LANE2, LANE3, LANE4, KEY1, KEY2, KEY3, KEY4, LANES, KEYS
+    global BBOX, JUDGEMENENT_LINE, LANE1, LANE2, LANE3, LANE4, KEY1, KEY2, KEY3, KEY4, LANES, KEYS, INPUT_DELAY_MS, DELAY_MS
     config = dict(DEFAULT_CONFIG)
     if CONFIG_PATH.exists():
         try:
@@ -106,6 +125,8 @@ def load_config():
     if len(raw_bbox) == 4:
         BBOX = tuple(int(x) for x in raw_bbox)
     JUDGEMENENT_LINE = int(config.get("judgement_line", 0))
+    INPUT_DELAY_MS = int(config.get("input_delay_ms", config.get("delay_ms", 0)))
+    DELAY_MS = INPUT_DELAY_MS
     lanes = config.get("lanes", [])
     if lanes:
         LANES = [int(l.get("x", 0)) for l in lanes]
@@ -135,6 +156,8 @@ def save_config(config):
         s_data = {
             "bbox": config.get("bbox", list(BBOX)),
             "judgement_line": config.get("judgement_line", JUDGEMENENT_LINE),
+            "input_delay_ms": config.get("input_delay_ms", INPUT_DELAY_MS),
+            "delay_ms": config.get("delay_ms", INPUT_DELAY_MS),
             "global_threshold": config.get("global_threshold", 30),
             "input_mode": config.get("input_mode", "hold"),
             "lanes": config.get("lanes", [])
@@ -280,33 +303,94 @@ class ManiaPlayer:
 
         stride = self.width * 4
         y_off = self.judgement_line * stride
+        num_lanes = len(self.lanes)
         lane_byte_offsets = []
+        thresh_sums = []
+        keys = []
         for lane in self.lanes:
             x_clamped = min(max(0, int(lane.get("x", 0))), self.width - 1)
             lane_byte_offsets.append(y_off + (x_clamped * 4))
+            th = float(lane.get("threshold", self.global_threshold))
+            thresh_sums.append(th * 3.0)
+            keys.append(lane["parsed_key"])
+
+        lane_byte_offsets = tuple(lane_byte_offsets)
+        thresh_sums = tuple(thresh_sums)
+        keys = tuple(keys)
+        pressed_states = [False] * num_lanes
+
+        delayed_events = collections.deque()
+        delay_sec = max(0.0, float(self.config.get("input_delay_ms", self.config.get("delay_ms", INPUT_DELAY_MS))) / 1000.0)
 
         while self.p_status and not self.return_to_menu:
             if not self.is_running:
+                if delayed_events:
+                    delayed_events.clear()
                 time.sleep(0.01)
                 continue
 
+            # Process due delayed events before screen grab
+            if delay_sec > 0 and delayed_events:
+                t_now = time.perf_counter()
+                while delayed_events and delayed_events[0][0] <= t_now:
+                    _, act, k = delayed_events.popleft()
+                    if act == 1:
+                        try:
+                            self.keyboard.press(k)
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            self.keyboard.release(k)
+                        except Exception:
+                            pass
+
             shot = self.sct.grab(self.mss_monitor)
             raw = shot.raw
+            t_now = time.perf_counter()
 
-            for idx, lane in enumerate(self.lanes):
+            # Process due delayed events immediately after grab
+            if delay_sec > 0 and delayed_events:
+                while delayed_events and delayed_events[0][0] <= t_now:
+                    _, act, k = delayed_events.popleft()
+                    if act == 1:
+                        try:
+                            self.keyboard.press(k)
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            self.keyboard.release(k)
+                        except Exception:
+                            pass
+
+            for idx in range(num_lanes):
                 off = lane_byte_offsets[idx]
-                brightness = (raw[off + 2] + raw[off + 1] + raw[off]) / 3.0
-                thresh = float(lane.get("threshold", self.global_threshold))
-                k = lane["parsed_key"]
+                hit = (raw[off] + raw[off + 1] + raw[off + 2]) > thresh_sums[idx]
+                k = keys[idx]
 
-                if brightness > thresh:
-                    if not self.pressed_state.get(k, False):
-                        self.keyboard.press(k)
+                if hit:
+                    if not pressed_states[idx]:
+                        pressed_states[idx] = True
                         self.pressed_state[k] = True
+                        if delay_sec > 0:
+                            delayed_events.append((t_now + delay_sec, 1, k))
+                        else:
+                            try:
+                                self.keyboard.press(k)
+                            except Exception:
+                                pass
                 else:
-                    if self.pressed_state.get(k, False):
-                        self.keyboard.release(k)
+                    if pressed_states[idx]:
+                        pressed_states[idx] = False
                         self.pressed_state[k] = False
+                        if delay_sec > 0:
+                            delayed_events.append((t_now + delay_sec, 0, k))
+                        else:
+                            try:
+                                self.keyboard.release(k)
+                            except Exception:
+                                pass
 
             if show_fps:
                 loop_count += 1
@@ -314,9 +398,12 @@ class ManiaPlayer:
                 elapsed = now - last_time
                 if elapsed >= fps_interval:
                     fps = round(loop_count / elapsed, 1)
-                    print(f"\r[Engine Status] Running (MSS Engine) - {fps} FPS  ", end="", flush=True)
+                    del_info = f" | Delay: {int(delay_sec*1000)}ms" if delay_sec > 0 else ""
+                    print(f"\r[Engine Status] Running (MSS Engine) - {fps} FPS{del_info}  ", end="", flush=True)
                     loop_count = 0
                     last_time = now
+
+        delayed_events.clear()
 
     def run_pil_loop(self):
         show_fps = self.config.get("show_fps", True)
@@ -324,30 +411,79 @@ class ManiaPlayer:
         loop_count = 0
         last_time = time.time()
 
+        num_lanes = len(self.lanes)
+        lane_xs = []
+        thresh_sums = []
+        keys = []
+        for lane in self.lanes:
+            lane_xs.append(min(max(0, int(lane.get("x", 0))), self.width - 1))
+            th = float(lane.get("threshold", self.global_threshold))
+            thresh_sums.append(th * 3.0)
+            keys.append(lane["parsed_key"])
+
+        lane_xs = tuple(lane_xs)
+        thresh_sums = tuple(thresh_sums)
+        keys = tuple(keys)
+        pressed_states = [False] * num_lanes
+
+        delayed_events = collections.deque()
+        delay_sec = max(0.0, float(self.config.get("input_delay_ms", self.config.get("delay_ms", INPUT_DELAY_MS))) / 1000.0)
+
         while self.p_status and not self.return_to_menu:
             if not self.is_running:
+                if delayed_events:
+                    delayed_events.clear()
                 time.sleep(0.01)
                 continue
 
             try:
+                t_now = time.perf_counter()
+                if delay_sec > 0 and delayed_events:
+                    while delayed_events and delayed_events[0][0] <= t_now:
+                        _, act, k = delayed_events.popleft()
+                        if act == 1:
+                            try:
+                                self.keyboard.press(k)
+                            except Exception:
+                                pass
+                        else:
+                            try:
+                                self.keyboard.release(k)
+                            except Exception:
+                                pass
+
                 img = ImageGrab.grab(bbox=self.bbox)
                 px = img.load()
+                t_now = time.perf_counter()
 
-                for lane in self.lanes:
-                    x = min(max(0, int(lane.get("x", 0))), self.width - 1)
+                for idx in range(num_lanes):
+                    x = lane_xs[idx]
                     rgb = px[x, self.judgement_line]
-                    brightness = sum(rgb[:3]) / 3.0
-                    thresh = float(lane.get("threshold", self.global_threshold))
-                    k = lane["parsed_key"]
+                    hit = (rgb[0] + rgb[1] + rgb[2]) > thresh_sums[idx]
+                    k = keys[idx]
 
-                    if brightness > thresh:
-                        if not self.pressed_state.get(k, False):
-                            self.keyboard.press(k)
+                    if hit:
+                        if not pressed_states[idx]:
+                            pressed_states[idx] = True
                             self.pressed_state[k] = True
+                            if delay_sec > 0:
+                                delayed_events.append((t_now + delay_sec, 1, k))
+                            else:
+                                try:
+                                    self.keyboard.press(k)
+                                except Exception:
+                                    pass
                     else:
-                        if self.pressed_state.get(k, False):
-                            self.keyboard.release(k)
+                        if pressed_states[idx]:
+                            pressed_states[idx] = False
                             self.pressed_state[k] = False
+                            if delay_sec > 0:
+                                delayed_events.append((t_now + delay_sec, 0, k))
+                            else:
+                                try:
+                                    self.keyboard.release(k)
+                                except Exception:
+                                    pass
 
                 if show_fps:
                     loop_count += 1
@@ -355,12 +491,15 @@ class ManiaPlayer:
                     elapsed = now - last_time
                     if elapsed >= fps_interval:
                         fps = round(loop_count / elapsed, 1)
-                        print(f"\r[Engine Status] Running (PIL Engine) - {fps} FPS  ", end="", flush=True)
+                        del_info = f" | Delay: {int(delay_sec*1000)}ms" if delay_sec > 0 else ""
+                        print(f"\r[Engine Status] Running (PIL Engine) - {fps} FPS{del_info}  ", end="", flush=True)
                         loop_count = 0
                         last_time = now
 
-            except Exception as e:
+            except Exception:
                 time.sleep(0.005)
+
+        delayed_events.clear()
 
     def run(self):
         self.init_capture()
@@ -391,10 +530,17 @@ class ManiaPlayer:
 def click(img, keyboard):
     px = img.load()
     for lx, k in zip(LANES, KEYS):
-        if sum(px[lx, JUDGEMENENT_LINE]) / 3 > 30:
-            keyboard.press(k)
+        pk = parse_key(k)
+        if sum(px[lx, JUDGEMENENT_LINE][:3]) > 90:
+            try:
+                keyboard.press(pk)
+            except Exception:
+                pass
         else:
-            keyboard.release(k)
+            try:
+                keyboard.release(pk)
+            except Exception:
+                pass
 
 
 def get_ss(keyboard):

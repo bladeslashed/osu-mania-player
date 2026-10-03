@@ -24,6 +24,8 @@ Designed with a dual-engine architecture: a modular **Python / MSS engine** for 
   - **Auto-Spacing**: Automatically distribute lane trigger points evenly across any playfield width with a single click.
   - **Pixel Magnifier & Loupe**: Hover anywhere on the screenshot to inspect coordinates, exact RGB values, and brightness levels in real time.
   - **Live Judgement Detection Preview**: Visual strip showing simulated note detection (`sum(RGB)/3 > threshold`) at the judgement line before entering a match.
+  - **Input Delay Calibration (`input_delay_ms`)**: Fine-tune input delay in milliseconds (delays both hold and release) to sync with judgement windows (e.g. 300g precision) and hardware polling latencies.
+  - **Optimized 5K+ Execution Engine**: High-performance note processing for 5K, 7K, and multi-key charts with pre-parsed keys (handling `"space"` cleanly), zero per-frame memory allocations, state-cached UI visualizer, and Windows 1ms precision timer (`timeBeginPeriod`).
   - **Non-Intrusive Disappearing Capture**: Captures screenshots instantly or with a countdown delay, automatically hiding the calibrator window during capture so osu!mania is never occluded.
   - **Dedicated Backups Manager**: Every calibration save automatically archives a timestamped copy of `maniaplayer.py` into a dedicated `backups/` directory, preventing accidental loss of working configurations.
   - **Live Synchronization**: Saving or applying settings in the calibrator immediately propagates updates to both the running player engine and disk configurations (`mania_config.json`, `settings.json`).

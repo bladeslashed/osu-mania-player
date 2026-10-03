@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <mmsystem.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,6 +26,7 @@ typedef struct {
     int bbox_bottom;
     int judgement_line;
     int global_threshold;
+    int input_delay_ms;
     char input_mode[16]; // "hold" or "tap"
     Lane lanes[MAX_LANES];
     int lane_count;
@@ -70,6 +72,7 @@ void set_default_config(AppConfig* cfg) {
     cfg->bbox_bottom = 761;
     cfg->judgement_line = 0;
     cfg->global_threshold = 30;
+    cfg->input_delay_ms = 0;
     strcpy(cfg->input_mode, "hold");
 
     cfg->lane_count = 4;
@@ -141,6 +144,18 @@ bool load_config_file(AppConfig* cfg, const char* filename) {
         }
     }
 
+    char* pDelay = strstr(buf, "\"input_delay_ms\"");
+    if (!pDelay) pDelay = strstr(buf, "\"delay_ms\"");
+    if (pDelay) {
+        int dval = 0;
+        if (sscanf(pDelay, "\"input_delay_ms\": %d", &dval) == 1 ||
+            sscanf(pDelay, "\"input_delay_ms\":%d", &dval) == 1 ||
+            sscanf(pDelay, "\"delay_ms\": %d", &dval) == 1 ||
+            sscanf(pDelay, "\"delay_ms\":%d", &dval) == 1) {
+            cfg->input_delay_ms = dval;
+        }
+    }
+
     char* pMode = strstr(buf, "\"input_mode\"");
     if (pMode) {
         char m[16] = {0};
@@ -202,6 +217,8 @@ bool save_config_file(const AppConfig* cfg, const char* filename) {
     fprintf(f, "{\n");
     fprintf(f, "  \"bbox\": [%d, %d, %d, %d],\n", cfg->bbox_left, cfg->bbox_top, cfg->bbox_right, cfg->bbox_bottom);
     fprintf(f, "  \"judgement_line\": %d,\n", cfg->judgement_line);
+    fprintf(f, "  \"input_delay_ms\": %d,\n", cfg->input_delay_ms);
+    fprintf(f, "  \"delay_ms\": %d,\n", cfg->input_delay_ms);
     fprintf(f, "  \"global_threshold\": %d,\n", cfg->global_threshold);
     fprintf(f, "  \"input_mode\": \"%s\",\n", cfg->input_mode);
     fprintf(f, "  \"lanes\": [\n");
@@ -227,6 +244,38 @@ static inline void send_key_event(WORD vk, bool down) {
     input.ki.wVk = vk;
     input.ki.dwFlags = down ? 0 : KEYEVENTF_KEYUP;
     SendInput(1, &input, sizeof(INPUT));
+}
+
+typedef struct {
+    LONGLONG due_tick;
+    WORD vk;
+    bool down;
+} DelayedKeyEvent;
+
+#define MAX_DELAYED_EVENTS 1024
+static DelayedKeyEvent g_delayed_queue[MAX_DELAYED_EVENTS];
+static int g_queue_head = 0;
+static int g_queue_tail = 0;
+
+static inline void queue_delayed_event(LONGLONG due_tick, WORD vk, bool down) {
+    int next_tail = (g_queue_tail + 1) % MAX_DELAYED_EVENTS;
+    if (next_tail != g_queue_head) {
+        g_delayed_queue[g_queue_tail].due_tick = due_tick;
+        g_delayed_queue[g_queue_tail].vk = vk;
+        g_delayed_queue[g_queue_tail].down = down;
+        g_queue_tail = next_tail;
+    }
+}
+
+static inline void process_delayed_events(LONGLONG current_tick) {
+    while (g_queue_head != g_queue_tail) {
+        if (current_tick >= g_delayed_queue[g_queue_head].due_tick) {
+            send_key_event(g_delayed_queue[g_queue_head].vk, g_delayed_queue[g_queue_head].down);
+            g_queue_head = (g_queue_head + 1) % MAX_DELAYED_EVENTS;
+        } else {
+            break;
+        }
+    }
 }
 
 void release_all_keys(AppConfig* cfg) {
@@ -326,6 +375,7 @@ void print_menu(const AppConfig* cfg) {
         cfg->bbox_left, cfg->bbox_top, cfg->bbox_right, cfg->bbox_bottom,
         cfg->bbox_right - cfg->bbox_left, cfg->bbox_bottom - cfg->bbox_top);
     printf("  Judgement Line:   Y = %d\n", cfg->judgement_line);
+    printf("  Input Delay:      %d ms\n", cfg->input_delay_ms);
     printf("  Input Mode:       %s\n", _stricmp(cfg->input_mode, "hold") == 0 ? "HOLD (Default)" : "TAP");
     printf("  Lanes (%d):\n", cfg->lane_count);
     for (int i = 0; i < cfg->lane_count; i++) {
@@ -337,10 +387,11 @@ void print_menu(const AppConfig* cfg) {
     printf("  [2] Configure Lanes (Add, Edit, Remove)\n");
     printf("  [3] Edit Detection BBox\n");
     printf("  [4] Change Global Threshold\n");
-    printf("  [5] Toggle Input Mode (Hold vs Tap)\n");
-    printf("  [6] Reset to Default WhiteCat 23-Speed Preset\n");
-    printf("  [7] Save Configuration to %s\n", CONFIG_FILE);
-    printf("  [8] Exit\n");
+    printf("  [5] Change Input Delay (ms)\n");
+    printf("  [6] Toggle Input Mode (Hold vs Tap)\n");
+    printf("  [7] Reset to Default WhiteCat 23-Speed Preset\n");
+    printf("  [8] Save Configuration to %s\n", CONFIG_FILE);
+    printf("  [9] / [Q] Exit\n");
     printf("=================================================================\n");
     printf("Select option (or press Enter to start): ");
 }
@@ -480,6 +531,18 @@ void run_player(AppConfig* cfg) {
     int width = ctx.width;
     unsigned char* pBits = (unsigned char*)ctx.pBits;
 
+    LONGLONG delay_ticks = 0;
+    if (cfg->input_delay_ms > 0) {
+        delay_ticks = (freq.QuadPart * cfg->input_delay_ms) / 1000;
+    }
+    g_queue_head = 0;
+    g_queue_tail = 0;
+
+    int thresh_sums[MAX_LANES];
+    for (int i = 0; i < cfg->lane_count; i++) {
+        thresh_sums[i] = cfg->lanes[i].threshold * 3;
+    }
+
     while (g_program_active) {
         // Hotkey polling via GetAsyncKeyState
         if (GetAsyncKeyState('F') & 0x8000) {
@@ -493,6 +556,8 @@ void run_player(AppConfig* cfg) {
             if (g_is_running) {
                 printf("\n[|| STOP] Mania Player paused.\n");
                 g_is_running = false;
+                g_queue_head = 0;
+                g_queue_tail = 0;
                 release_all_keys(cfg);
             }
             Sleep(150);
@@ -505,6 +570,8 @@ void run_player(AppConfig* cfg) {
         if (GetAsyncKeyState('M') & 0x8000) {
             printf("\n[Menu] Returning to Configuration Menu...\n");
             g_is_running = false;
+            g_queue_head = 0;
+            g_queue_tail = 0;
             release_all_keys(cfg);
             Sleep(250);
             break;
@@ -513,6 +580,8 @@ void run_player(AppConfig* cfg) {
             printf("\n[XX EXIT] Exiting Mania Player...\n");
             g_is_running = false;
             g_program_active = false;
+            g_queue_head = 0;
+            g_queue_tail = 0;
             release_all_keys(cfg);
             break;
         }
@@ -522,8 +591,19 @@ void run_player(AppConfig* cfg) {
             continue;
         }
 
+        // Process due delayed events before screen capture
+        QueryPerformanceCounter(&t_now);
+        if (delay_ticks > 0) {
+            process_delayed_events(t_now.QuadPart);
+        }
+
         // 1. Ultra-fast direct memory screen capture
         BitBlt(ctx.hMemDC, 0, 0, width, ctx.height, ctx.hScreenDC, cfg->bbox_left, cfg->bbox_top, SRCCOPY);
+
+        QueryPerformanceCounter(&t_now);
+        if (delay_ticks > 0) {
+            process_delayed_events(t_now.QuadPart);
+        }
 
         // 2. Direct memory pixel inspection (offset = (line_y * width + x) * 4)
         for (int i = 0; i < cfg->lane_count; i++) {
@@ -534,23 +614,35 @@ void run_player(AppConfig* cfg) {
             int b = pBits[offset];
             int g = pBits[offset + 1];
             int r = pBits[offset + 2];
-            int brightness = (r + g + b) / 3;
 
-            bool is_active = (brightness > cfg->lanes[i].threshold);
+            bool is_active = ((r + g + b) > thresh_sums[i]);
             bool was_active = cfg->lanes[i].is_pressed;
 
             if (hold_mode) {
                 if (is_active && !was_active) {
-                    send_key_event(cfg->lanes[i].vk, true);
+                    if (delay_ticks > 0) {
+                        queue_delayed_event(t_now.QuadPart + delay_ticks, cfg->lanes[i].vk, true);
+                    } else {
+                        send_key_event(cfg->lanes[i].vk, true);
+                    }
                     cfg->lanes[i].is_pressed = true;
                 } else if (!is_active && was_active) {
-                    send_key_event(cfg->lanes[i].vk, false);
+                    if (delay_ticks > 0) {
+                        queue_delayed_event(t_now.QuadPart + delay_ticks, cfg->lanes[i].vk, false);
+                    } else {
+                        send_key_event(cfg->lanes[i].vk, false);
+                    }
                     cfg->lanes[i].is_pressed = false;
                 }
             } else { // Tap mode (debounced)
                 if (is_active && !was_active) {
-                    send_key_event(cfg->lanes[i].vk, true);
-                    send_key_event(cfg->lanes[i].vk, false);
+                    if (delay_ticks > 0) {
+                        queue_delayed_event(t_now.QuadPart + delay_ticks, cfg->lanes[i].vk, true);
+                        queue_delayed_event(t_now.QuadPart + delay_ticks, cfg->lanes[i].vk, false);
+                    } else {
+                        send_key_event(cfg->lanes[i].vk, true);
+                        send_key_event(cfg->lanes[i].vk, false);
+                    }
                     cfg->lanes[i].is_pressed = true;
                 } else if (!is_active && was_active) {
                     cfg->lanes[i].is_pressed = false;
@@ -566,18 +658,29 @@ void run_player(AppConfig* cfg) {
         if (elapsed_sec >= 2.0) {
             double fps = (double)frame_count / elapsed_sec;
             double latency_ms = (elapsed_sec / (double)frame_count) * 1000.0;
-            printf("\r[Native C Active] FPS: %6.1f | Frame Latency: %5.2f ms | Lanes: %d", fps, latency_ms, cfg->lane_count);
+            if (cfg->input_delay_ms > 0) {
+                printf("\r[Native C Active] FPS: %6.1f | Latency: %5.2f ms | Delay: %d ms | Lanes: %d", fps, latency_ms, cfg->input_delay_ms, cfg->lane_count);
+            } else {
+                printf("\r[Native C Active] FPS: %6.1f | Frame Latency: %5.2f ms | Lanes: %d", fps, latency_ms, cfg->lane_count);
+            }
             fflush(stdout);
             frame_count = 0;
             t_start = t_now;
         }
     }
 
+    g_queue_head = 0;
+    g_queue_tail = 0;
+
     release_all_keys(cfg);
     cleanup_capture(&ctx);
 }
 
 int main() {
+    CreateDirectoryA("presets", NULL);
+    CreateDirectoryA("backups", NULL);
+    timeBeginPeriod(1);
+
     set_default_config(&g_config);
     if (!load_config_file(&g_config, CONFIG_FILE)) {
         save_config_file(&g_config, CONFIG_FILE);
@@ -603,20 +706,28 @@ int main() {
                 printf("[Updated] Global threshold set to %d\n", g_config.global_threshold);
             }
         } else if (choice == '5') {
+            printf("Enter input delay in milliseconds (0-5000) [%d]: ", g_config.input_delay_ms);
+            if (fgets(line, sizeof(line), stdin) && line[0] != '\n') {
+                int d = atoi(line);
+                if (d < 0) d = 0;
+                g_config.input_delay_ms = d;
+                printf("[Updated] Input delay set to %d ms\n", g_config.input_delay_ms);
+            }
+        } else if (choice == '6') {
             if (_stricmp(g_config.input_mode, "hold") == 0) {
                 strcpy(g_config.input_mode, "tap");
             } else {
                 strcpy(g_config.input_mode, "hold");
             }
             printf("[Updated] Mode toggled to: %s\n", g_config.input_mode);
-        } else if (choice == '6') {
+        } else if (choice == '7') {
             set_default_config(&g_config);
             save_config_file(&g_config, CONFIG_FILE);
             printf("[Reset] Restored default WhiteCat 23-speed preset.\n");
-        } else if (choice == '7') {
+        } else if (choice == '8') {
             save_config_file(&g_config, CONFIG_FILE);
             printf("[Saved] Saved settings to %s\n", CONFIG_FILE);
-        } else if (choice == '8') {
+        } else if (choice == '9' || choice == 'q' || choice == 'Q') {
             printf("\nExiting Mania Player. Goodbye!\n");
             break;
         } else {
@@ -624,5 +735,6 @@ int main() {
         }
     }
 
+    timeEndPeriod(1);
     return 0;
 }

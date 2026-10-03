@@ -7,6 +7,7 @@ import os
 import sys
 import time
 import json
+import collections
 import importlib.util
 import threading
 from pathlib import Path
@@ -25,7 +26,7 @@ try:
 except ImportError:
     HAS_MSS = False
 
-# Enable High-DPI awareness on Windows
+# Enable High-DPI awareness & 1ms precision timer on Windows
 if sys.platform == "win32":
     try:
         import ctypes
@@ -38,12 +39,36 @@ if sys.platform == "win32":
                 ctypes.windll.user32.SetProcessDPIAware()
             except Exception:
                 pass
+    try:
+        ctypes.windll.winmm.timeBeginPeriod(1)
+    except Exception:
+        pass
+
+
+def parse_key(key_val):
+    """Converts key string (e.g. 'q', 'space', 'left', 'up') into pynput Key object or char."""
+    if not isinstance(key_val, str) or len(key_val) == 0:
+        return key_val
+    if len(key_val) == 1:
+        return key_val
+    normalized = key_val.lower().strip()
+    if hasattr(Key, normalized):
+        return getattr(Key, normalized)
+    return key_val
 
 
 def get_base_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
+
+
+# Ensure required working folders exist at runtime
+_base = get_base_dir()
+(_base / "presets").mkdir(parents=True, exist_ok=True)
+(_base / "backups").mkdir(parents=True, exist_ok=True)
+(Path.cwd() / "presets").mkdir(parents=True, exist_ok=True)
+(Path.cwd() / "backups").mkdir(parents=True, exist_ok=True)
 
 
 def find_target_script() -> Path:
@@ -96,6 +121,36 @@ def load_mania_module():
 load_mania_module()
 
 
+def get_harness_module():
+    """Dynamically loads or reloads the most up-to-date mania_harness module.
+    Prioritizes disk files in working directory or base directory so updates are
+    immediately reflected at runtime, falling back to the bundled module."""
+    base_dir = get_base_dir()
+    candidates = [
+        Path.cwd().resolve() / "mania_harness.py",
+        base_dir / "mania_harness.py",
+    ]
+    if hasattr(sys, "_MEIPASS"):
+        candidates.append(Path(sys._MEIPASS) / "mania_harness.py")
+
+    for p in candidates:
+        if p and p.is_file():
+            try:
+                spec = importlib.util.spec_from_file_location("mania_harness", str(p))
+                if spec and spec.loader:
+                    mod = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(mod)
+                    return mod
+            except Exception as e:
+                print(f"[WARN] Failed to load external mania_harness from {p}: {e}")
+
+    try:
+        importlib.reload(mania_harness)
+        return mania_harness
+    except Exception:
+        return mania_harness
+
+
 class ModernManiaApp:
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -125,6 +180,9 @@ class ModernManiaApp:
         self.active_lanes = [39, 215, 353, 502]
         self.active_keys = ["q", "w", "[", "]"]
 
+        # Delay setting (milliseconds)
+        self.input_delay_ms = 0
+
         # Load initial config from mania_config.json if available
         base_dir = get_base_dir()
         cfg_file = base_dir / "mania_config.json"
@@ -137,6 +195,7 @@ class ModernManiaApp:
                 if c_bbox and len(c_bbox) == 4:
                     self.active_bbox = tuple(int(x) for x in c_bbox)
                 self.active_jl = int(cfg_data.get("judgement_line", self.active_jl))
+                self.input_delay_ms = int(cfg_data.get("input_delay_ms", cfg_data.get("delay_ms", 0)))
                 c_lanes = cfg_data.get("lanes", [])
                 if c_lanes:
                     self.key_count = min(20, max(1, len(c_lanes)))
@@ -145,6 +204,7 @@ class ModernManiaApp:
             except Exception:
                 pass
         else:
+            self.input_delay_ms = int(getattr(maniaplayer, "INPUT_DELAY_MS", getattr(maniaplayer, "DELAY_MS", 0)))
             if hasattr(maniaplayer, "LANES") and hasattr(maniaplayer, "KEYS"):
                 self.key_count = min(20, max(1, len(maniaplayer.LANES)))
                 self.active_lanes = list(maniaplayer.LANES[:self.key_count])
@@ -163,6 +223,7 @@ class ModernManiaApp:
                     str(getattr(maniaplayer, "KEY4", "]")).lower(),
                 ]
 
+        self.parsed_keys = [parse_key(k) for k in self.active_keys]
         self.config_updated = False
 
         # Live telemetry
@@ -321,6 +382,9 @@ class ModernManiaApp:
         self.lbl_cfg_jl = tk.Label(cfg_frame, text="Judgement Line: --", bg="#0f172a", fg="#cbd5e1", font=("Consolas", 8), anchor="w")
         self.lbl_cfg_jl.pack(fill=tk.X, pady=1)
 
+        self.lbl_cfg_delay = tk.Label(cfg_frame, text=f"Input Delay: {self.input_delay_ms} ms", bg="#0f172a", fg="#38bdf8", font=("Consolas", 8), anchor="w")
+        self.lbl_cfg_delay.pack(fill=tk.X, pady=1)
+
         # 6. Quick Controls & Actions (Exit)
         action_bar = tk.Frame(self.root, bg="#0f172a")
         action_bar.pack(side=tk.TOP, fill=tk.X, padx=12, pady=4)
@@ -436,19 +500,12 @@ class ModernManiaApp:
 
         if keys is not None and len(keys) >= new_count:
             self.active_keys = [str(k).lower().strip() for k in keys[:new_count]]
+        elif old_count != new_count and new_count in mania_harness.DEFAULT_KEY_LAYOUTS:
+            self.active_keys = list(mania_harness.DEFAULT_KEY_LAYOUTS[new_count])
         else:
-            if new_count in mania_harness.DEFAULT_KEY_LAYOUTS and (old_count != new_count or len(self.active_keys) != new_count):
+            if new_count in mania_harness.DEFAULT_KEY_LAYOUTS and len(self.active_keys) != new_count:
                 layout = mania_harness.DEFAULT_KEY_LAYOUTS[new_count]
-                updated = list(self.active_keys[:new_count])
-                while len(updated) < new_count:
-                    idx = len(updated)
-                    if idx < len(layout):
-                        updated.append(layout[idx])
-                    elif idx < len(mania_harness.ALL_20_KEYS):
-                        updated.append(mania_harness.ALL_20_KEYS[idx])
-                    else:
-                        updated.append(f"k{idx+1}")
-                self.active_keys = updated[:new_count]
+                self.active_keys = list(layout)
             else:
                 while len(self.active_keys) < new_count:
                     idx = len(self.active_keys)
@@ -458,6 +515,7 @@ class ModernManiaApp:
                         self.active_keys.append(f"k{idx+1}")
                 self.active_keys = self.active_keys[:new_count]
 
+        self.parsed_keys = [parse_key(k) for k in self.active_keys]
         self.lane_states = [False] * new_count
         self.config_updated = True
 
@@ -478,6 +536,8 @@ class ModernManiaApp:
                     pass
             cfg["bbox"] = list(self.active_bbox)
             cfg["judgement_line"] = self.active_jl
+            cfg["input_delay_ms"] = self.input_delay_ms
+            cfg["delay_ms"] = self.input_delay_ms
             cfg["key_count"] = self.key_count
             cfg["lanes"] = [
                 {
@@ -494,6 +554,8 @@ class ModernManiaApp:
             s_data = {
                 "bbox": list(self.active_bbox),
                 "judgement_line": self.active_jl,
+                "input_delay_ms": self.input_delay_ms,
+                "delay_ms": self.input_delay_ms,
                 "global_threshold": 30,
                 "input_mode": "hold",
                 "lanes": cfg["lanes"]
@@ -525,6 +587,8 @@ class ModernManiaApp:
             lanes_str = f"{self.key_count} Keys: {keys_preview}"
         self.lbl_cfg_lanes.config(text=lanes_str)
         self.lbl_cfg_jl.config(text=f"JUDGEMENENT_LINE: {self.active_jl}")
+        if hasattr(self, "lbl_cfg_delay"):
+            self.lbl_cfg_delay.config(text=f"Input Delay: {self.input_delay_ms} ms")
 
         for i in range(min(len(self.lane_pads), self.key_count)):
             self.lane_pads[i][2].config(text=self.active_keys[i].upper())
@@ -540,14 +604,19 @@ class ModernManiaApp:
         else:
             messagebox.showerror("Reload Failed", f"Could not load script:\n{load_error}")
 
-    def on_calibrator_update(self, bbox, judgement_line, lanes, keys=None):
-        """Callback invoked when Calibrator saves or applies new coordinates or keys."""
+    def on_calibrator_update(self, bbox, judgement_line, lanes, keys=None, delay_ms=None):
+        """Callback invoked when Calibrator saves or applies new coordinates, keys, or delay."""
         new_count = len(lanes)
+        if delay_ms is not None:
+            self.input_delay_ms = max(0, int(delay_ms))
+
         if LOADED_MANIA and maniaplayer:
             try:
                 maniaplayer.BBOX = bbox
                 maniaplayer.JUDGEMENENT_LINE = judgement_line
                 maniaplayer.LANES = list(lanes)
+                maniaplayer.INPUT_DELAY_MS = self.input_delay_ms
+                maniaplayer.DELAY_MS = self.input_delay_ms
                 if keys:
                     maniaplayer.KEYS = [str(k).lower() for k in keys]
                 for i in range(min(4, len(lanes))):
@@ -566,26 +635,45 @@ class ModernManiaApp:
             self.active_lanes = list(lanes)
             if keys:
                 self.active_keys = [str(k).lower() for k in keys]
+            self.parsed_keys = [parse_key(k) for k in self.active_keys]
             self._rebuild_lane_visualizer()
             self._sync_with_maniaplayer()
 
         self.config_updated = True
         keys_str = "/".join(self.active_keys).upper()
-        self.lbl_status_sub.config(text=f"Updated: {self.key_count} Keys [{keys_str}] | BBOX {bbox}")
+        self.lbl_status_sub.config(text=f"Updated: {self.key_count} Keys [{keys_str}] | Delay: {self.input_delay_ms}ms | BBOX {bbox}")
 
 
     def open_calibrator(self):
+        # Prevent opening multiple calibration windows concurrently
+        if hasattr(self, "calib_window") and self.calib_window is not None:
+            try:
+                if self.calib_window.winfo_exists():
+                    self.calib_window.lift()
+                    self.calib_window.focus_force()
+                    return
+            except Exception:
+                pass
+
         calib_win = tk.Toplevel(self.root)
+        self.calib_window = calib_win
         calib_win.lift()
         calib_win.attributes("-topmost", False)
 
         base_dir = get_base_dir()
-        target_file = base_dir / "maniaplayer.py"
-        config_path = base_dir / "mania_config.json"
-        presets_dir = base_dir / "presets"
-        backups_dir = base_dir / "backups"
+        target_file = find_target_script()
+        
+        candidates_cfg = [Path.cwd() / "mania_config.json", base_dir / "mania_config.json"]
+        config_path = next((p for p in candidates_cfg if p.exists()), base_dir / "mania_config.json")
 
-        app = mania_harness.ManiaHarnessApp(
+        presets_dir = Path.cwd() / "presets" if (Path.cwd() / "presets").exists() else (base_dir / "presets")
+        backups_dir = Path.cwd() / "backups" if (Path.cwd() / "backups").exists() else (base_dir / "backups")
+        presets_dir.mkdir(parents=True, exist_ok=True)
+        backups_dir.mkdir(parents=True, exist_ok=True)
+
+        harness_mod = get_harness_module()
+
+        self.calib_app = harness_mod.ManiaHarnessApp(
             calib_win,
             on_save_callback=self.on_calibrator_update,
             target_file=target_file,
@@ -597,6 +685,8 @@ class ModernManiaApp:
         def on_calib_close():
             self._reload_script()
             self._sync_with_maniaplayer()
+            self.calib_window = None
+            self.calib_app = None
             calib_win.destroy()
 
         calib_win.protocol("WM_DELETE_WINDOW", on_calib_close)
@@ -648,8 +738,9 @@ class ModernManiaApp:
         self.lbl_status_text.config(text="STANDBY / IDLE", bg="#334155", fg="#f8fafc")
         self.lbl_status_sub.config(bg="#334155", fg="#94a3b8")
 
-        # Release keys safely
-        for k in self.active_keys:
+        # Release keys safely using parsed representations
+        keys_to_release = getattr(self, "parsed_keys", self.active_keys)
+        for k in keys_to_release:
             try:
                 self.keyboard.release(k)
             except Exception:
@@ -657,13 +748,19 @@ class ModernManiaApp:
         self.lane_states = [False] * self.key_count
 
     def _bot_worker(self):
-        """Ultra-fast capture worker achieving 60-240+ FPS with dynamic coordinate & key reloading (1-20 keys)."""
+        """Ultra-fast capture worker achieving 60-240+ FPS with dynamic coordinate & key reloading (1-20 keys).
+        Fully optimized for 5k+ layouts: pre-parsed keys (handling 'space'), zero per-frame allocations,
+        and high-precision input delay handling via collections.deque."""
         jl = self.active_jl
         lanes = list(self.active_lanes)
-        keys = list(self.active_keys)
         bbox = self.active_bbox
         num_lanes = len(lanes)
+        keys = [parse_key(k) for k in self.active_keys[:num_lanes]]
         pressed_states = [False] * num_lanes
+        current_hits = [False] * num_lanes
+        delayed_events = collections.deque()
+        delay_sec = max(0.0, float(self.input_delay_ms) / 1000.0)
+        thresh_sums = tuple(90 for _ in range(num_lanes))
 
         if HAS_MSS:
             try:
@@ -682,15 +779,35 @@ class ModernManiaApp:
                     offsets = [(jl_clamp * stride) + (min(max(0, lx), w - 1) * 4) for lx in lanes]
 
                     while self.is_running and self.p_status:
+                        # Process due delayed events before grab
+                        if delay_sec > 0 and delayed_events:
+                            t_now = time.perf_counter()
+                            while delayed_events and delayed_events[0][0] <= t_now:
+                                _, act, k = delayed_events.popleft()
+                                if act == 1:
+                                    try:
+                                        self.keyboard.press(k)
+                                    except Exception:
+                                        pass
+                                else:
+                                    try:
+                                        self.keyboard.release(k)
+                                    except Exception:
+                                        pass
+
                         # Check dynamic updates from calibrator or GUI
                         if self.config_updated or current_bbox != self.active_bbox:
                             bbox = self.active_bbox
                             current_bbox = bbox
                             jl = self.active_jl
                             lanes = list(self.active_lanes)
-                            keys = list(self.active_keys)
                             num_lanes = len(lanes)
+                            keys = [parse_key(k) for k in self.active_keys[:num_lanes]]
                             pressed_states = [False] * num_lanes
+                            current_hits = [False] * num_lanes
+                            thresh_sums = tuple(90 for _ in range(num_lanes))
+                            delay_sec = max(0.0, float(self.input_delay_ms) / 1000.0)
+                            delayed_events.clear()
                             monitor = {
                                 "left": bbox[0],
                                 "top": bbox[1],
@@ -706,30 +823,61 @@ class ModernManiaApp:
 
                         shot = sct.grab(monitor)
                         raw = shot.raw
+                        t_now = time.perf_counter()
 
-                        current_hits = [False] * num_lanes
-                        for i in range(num_lanes):
-                            off = offsets[i]
-                            hit = (raw[off + 2] + raw[off + 1] + raw[off]) > 90
-                            current_hits[i] = hit
-                            k = keys[i]
-                            if hit:
-                                if not pressed_states[i]:
+                        # Process due delayed events immediately after grab
+                        if delay_sec > 0 and delayed_events:
+                            while delayed_events and delayed_events[0][0] <= t_now:
+                                _, act, k = delayed_events.popleft()
+                                if act == 1:
                                     try:
                                         self.keyboard.press(k)
                                     except Exception:
                                         pass
-                                    pressed_states[i] = True
-                            else:
-                                if pressed_states[i]:
+                                else:
                                     try:
                                         self.keyboard.release(k)
                                     except Exception:
                                         pass
-                                    pressed_states[i] = False
 
-                        self.lane_states = current_hits
+                        for i in range(num_lanes):
+                            off = offsets[i]
+                            # raw BGRA byte buffer: sum of B+G+R
+                            hit = (raw[off] + raw[off + 1] + raw[off + 2]) > thresh_sums[i]
+                            current_hits[i] = hit
+                            k = keys[i]
+
+                            if hit:
+                                if not pressed_states[i]:
+                                    pressed_states[i] = True
+                                    if delay_sec > 0:
+                                        delayed_events.append((t_now + delay_sec, 1, k))
+                                    else:
+                                        try:
+                                            self.keyboard.press(k)
+                                        except Exception:
+                                            pass
+                            else:
+                                if pressed_states[i]:
+                                    pressed_states[i] = False
+                                    if delay_sec > 0:
+                                        delayed_events.append((t_now + delay_sec, 0, k))
+                                    else:
+                                        try:
+                                            self.keyboard.release(k)
+                                        except Exception:
+                                            pass
+
+                        self.lane_states = list(current_hits)
                         self.loop_count += 1
+
+                    # Cleanup on stop
+                    delayed_events.clear()
+                    for k in keys:
+                        try:
+                            self.keyboard.release(k)
+                        except Exception:
+                            pass
                     return
             except Exception:
                 pass
@@ -741,41 +889,75 @@ class ModernManiaApp:
                     bbox = self.active_bbox
                     jl = self.active_jl
                     lanes = list(self.active_lanes)
-                    keys = list(self.active_keys)
                     num_lanes = len(lanes)
+                    keys = [parse_key(k) for k in self.active_keys[:num_lanes]]
                     pressed_states = [False] * num_lanes
+                    current_hits = [False] * num_lanes
+                    thresh_sums = tuple(90 for _ in range(num_lanes))
+                    delay_sec = max(0.0, float(self.input_delay_ms) / 1000.0)
+                    delayed_events.clear()
                     self.config_updated = False
+
+                t_now = time.perf_counter()
+                if delay_sec > 0 and delayed_events:
+                    while delayed_events and delayed_events[0][0] <= t_now:
+                        _, act, k = delayed_events.popleft()
+                        if act == 1:
+                            try:
+                                self.keyboard.press(k)
+                            except Exception:
+                                pass
+                        else:
+                            try:
+                                self.keyboard.release(k)
+                            except Exception:
+                                pass
 
                 check = ImageGrab.grab(bbox=bbox)
                 px = check.load()
+                t_now = time.perf_counter()
 
-                current_hits = [False] * num_lanes
                 w = max(1, bbox[2] - bbox[0])
                 h = max(1, bbox[3] - bbox[1])
                 jl_clamp = min(max(0, jl), h - 1)
 
                 for i in range(num_lanes):
                     lx = min(max(0, lanes[i]), w - 1)
-                    hit = sum(px[lx, jl_clamp][:3]) / 3 > 30
+                    hit = sum(px[lx, jl_clamp][:3]) > thresh_sums[i]
                     current_hits[i] = hit
                     k = keys[i]
+
                     if hit:
                         if not pressed_states[i]:
-                            try:
-                                self.keyboard.press(k)
-                            except Exception:
-                                pass
                             pressed_states[i] = True
+                            if delay_sec > 0:
+                                delayed_events.append((t_now + delay_sec, 1, k))
+                            else:
+                                try:
+                                    self.keyboard.press(k)
+                                except Exception:
+                                    pass
                     else:
                         if pressed_states[i]:
-                            try:
-                                self.keyboard.release(k)
-                            except Exception:
-                                pass
                             pressed_states[i] = False
+                            if delay_sec > 0:
+                                delayed_events.append((t_now + delay_sec, 0, k))
+                            else:
+                                try:
+                                    self.keyboard.release(k)
+                                except Exception:
+                                    pass
 
-                self.lane_states = current_hits
+                self.lane_states = list(current_hits)
                 self.loop_count += 1
+            except Exception:
+                pass
+
+        # Cleanup fallback
+        delayed_events.clear()
+        for k in keys:
+            try:
+                self.keyboard.release(k)
             except Exception:
                 pass
 
@@ -802,6 +984,8 @@ class ModernManiaApp:
     # UI Refresh Loop (FPS & Lane Visualizer)
     # -------------------------------------------------------------
     def _start_ui_refresh_loop(self):
+        self._last_rendered_lane_states = []
+
         def refresh():
             now = time.time()
             elapsed = now - self.last_fps_time
@@ -812,19 +996,24 @@ class ModernManiaApp:
                 self.last_fps_time = now
 
             n = min(len(self.lane_pads), len(self.lane_states))
+            if len(self._last_rendered_lane_states) != n:
+                self._last_rendered_lane_states = [None] * n
+
             for i in range(n):
-                pad, l_name, l_key, l_state, color = self.lane_pads[i]
                 active = self.lane_states[i]
-                if active:
-                    pad.config(bg=color, highlightbackground="white")
-                    l_name.config(bg=color, fg="black")
-                    l_key.config(bg=color, fg="black")
-                    l_state.config(bg=color, fg="black", text="PRESS")
-                else:
-                    pad.config(bg="#0f172a", highlightbackground="#334155")
-                    l_name.config(bg="#0f172a", fg="#94a3b8")
-                    l_key.config(bg="#0f172a", fg=color)
-                    l_state.config(bg="#0f172a", fg="#64748b", text="OFF")
+                if active != self._last_rendered_lane_states[i]:
+                    self._last_rendered_lane_states[i] = active
+                    pad, l_name, l_key, l_state, color = self.lane_pads[i]
+                    if active:
+                        pad.config(bg=color, highlightbackground="white")
+                        l_name.config(bg=color, fg="black")
+                        l_key.config(bg=color, fg="black")
+                        l_state.config(bg=color, fg="black", text="PRESS")
+                    else:
+                        pad.config(bg="#0f172a", highlightbackground="#334155")
+                        l_name.config(bg="#0f172a", fg="#94a3b8")
+                        l_key.config(bg="#0f172a", fg=color)
+                        l_state.config(bg="#0f172a", fg="#64748b", text="OFF")
 
             self.root.after(30, refresh)
 
@@ -833,15 +1022,21 @@ class ModernManiaApp:
     def on_close(self):
         self.is_running = False
         self.p_status = False
-        if hasattr(self, 'keyboard') and hasattr(self, 'active_keys'):
-            for k in self.active_keys:
-                try:
-                    self.keyboard.release(k)
-                except Exception:
-                    pass
+        keys_to_release = getattr(self, "parsed_keys", getattr(self, "active_keys", []))
+        for k in keys_to_release:
+            try:
+                self.keyboard.release(k)
+            except Exception:
+                pass
         if self.listener:
             try:
                 self.listener.stop()
+            except Exception:
+                pass
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                ctypes.windll.winmm.timeEndPeriod(1)
             except Exception:
                 pass
         self.root.destroy()

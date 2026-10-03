@@ -12,10 +12,9 @@ build/
 dist/
 *.spec.bak
 
-# Safety backups generated at runtime (keep .gitkeep)
-backups/*.py
-backups/*.json
-!backups/.gitkeep
+# Safety backups and custom presets
+backups/
+presets/
 
 # Operating system artifacts
 Thumbs.db
