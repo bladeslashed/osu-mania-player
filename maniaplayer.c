@@ -59,9 +59,26 @@ WORD resolve_vk(const char* key_str) {
     if (_stricmp(key_str, "ctrl") == 0) return VK_CONTROL;
     if (_stricmp(key_str, "enter") == 0) return VK_RETURN;
     if (_stricmp(key_str, "tab") == 0) return VK_TAB;
+    if (_stricmp(key_str, "backspace") == 0) return VK_BACK;
+    if (_stricmp(key_str, "alt") == 0) return VK_MENU;
+    if (_stricmp(key_str, "capslock") == 0) return VK_CAPITAL;
+    if (_stricmp(key_str, "esc") == 0 || _stricmp(key_str, "escape") == 0) return VK_ESCAPE;
+    if (_stricmp(key_str, "bracketleft") == 0 || strcmp(key_str, "[") == 0) return VK_OEM_4;
+    if (_stricmp(key_str, "bracketright") == 0 || strcmp(key_str, "]") == 0) return VK_OEM_6;
+    if (_stricmp(key_str, "semicolon") == 0 || strcmp(key_str, ";") == 0) return VK_OEM_1;
+    if (_stricmp(key_str, "quote") == 0 || strcmp(key_str, "'") == 0) return VK_OEM_7;
+    if (_stricmp(key_str, "comma") == 0 || strcmp(key_str, ",") == 0) return VK_OEM_COMMA;
+    if (_stricmp(key_str, "period") == 0 || strcmp(key_str, ".") == 0) return VK_OEM_PERIOD;
+    if (_stricmp(key_str, "slash") == 0 || strcmp(key_str, "/") == 0) return VK_OEM_2;
+    if (_stricmp(key_str, "backslash") == 0 || strcmp(key_str, "\\") == 0) return VK_OEM_5;
+    if (_stricmp(key_str, "minus") == 0 || strcmp(key_str, "-") == 0) return VK_OEM_MINUS;
+    if (_stricmp(key_str, "equal") == 0 || _stricmp(key_str, "equals") == 0 || strcmp(key_str, "=") == 0) return VK_OEM_PLUS;
 
     SHORT res = VkKeyScanA(key_str[0]);
-    if (res == -1) return (WORD)key_str[0];
+    if (res == -1) {
+        if (key_str[0] >= 'a' && key_str[0] <= 'z') return (WORD)(key_str[0] - 'a' + 'A');
+        return (WORD)key_str[0];
+    }
     return LOBYTE(res);
 }
 
@@ -236,14 +253,28 @@ bool save_config_file(const AppConfig* cfg, const char* filename) {
     return true;
 }
 
-// Low-level fast keyboard input via SendInput
+// Low-level fast keyboard input via SendInput with atomic batching & hardware scancodes
+static inline void send_key_batch(const WORD* vks, const bool* downs, int count) {
+    if (count <= 0) return;
+    INPUT inputs[MAX_LANES * 2];
+    if (count > MAX_LANES * 2) count = MAX_LANES * 2;
+    ZeroMemory(inputs, sizeof(INPUT) * count);
+    for (int i = 0; i < count; i++) {
+        inputs[i].type = INPUT_KEYBOARD;
+        inputs[i].ki.wVk = vks[i];
+        inputs[i].ki.wScan = (WORD)MapVirtualKeyA(vks[i], MAPVK_VK_TO_VSC);
+        inputs[i].ki.dwFlags = downs[i] ? 0 : KEYEVENTF_KEYUP;
+        if (vks[i] == VK_LEFT || vks[i] == VK_RIGHT || vks[i] == VK_UP || vks[i] == VK_DOWN ||
+            vks[i] == VK_INSERT || vks[i] == VK_DELETE || vks[i] == VK_HOME || vks[i] == VK_END ||
+            vks[i] == VK_PRIOR || vks[i] == VK_NEXT || vks[i] == VK_RCONTROL || vks[i] == VK_RMENU) {
+            inputs[i].ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+        }
+    }
+    SendInput(count, inputs, sizeof(INPUT));
+}
+
 static inline void send_key_event(WORD vk, bool down) {
-    INPUT input;
-    ZeroMemory(&input, sizeof(INPUT));
-    input.type = INPUT_KEYBOARD;
-    input.ki.wVk = vk;
-    input.ki.dwFlags = down ? 0 : KEYEVENTF_KEYUP;
-    SendInput(1, &input, sizeof(INPUT));
+    send_key_batch(&vk, &down, 1);
 }
 
 typedef struct {
@@ -268,22 +299,43 @@ static inline void queue_delayed_event(LONGLONG due_tick, WORD vk, bool down) {
 }
 
 static inline void process_delayed_events(LONGLONG current_tick) {
+    WORD batch_vks[MAX_LANES * 2];
+    bool batch_downs[MAX_LANES * 2];
+    int batch_count = 0;
+
     while (g_queue_head != g_queue_tail) {
         if (current_tick >= g_delayed_queue[g_queue_head].due_tick) {
-            send_key_event(g_delayed_queue[g_queue_head].vk, g_delayed_queue[g_queue_head].down);
+            batch_vks[batch_count] = g_delayed_queue[g_queue_head].vk;
+            batch_downs[batch_count] = g_delayed_queue[g_queue_head].down;
+            batch_count++;
             g_queue_head = (g_queue_head + 1) % MAX_DELAYED_EVENTS;
+            if (batch_count >= MAX_LANES * 2) {
+                send_key_batch(batch_vks, batch_downs, batch_count);
+                batch_count = 0;
+            }
         } else {
             break;
         }
     }
+    if (batch_count > 0) {
+        send_key_batch(batch_vks, batch_downs, batch_count);
+    }
 }
 
 void release_all_keys(AppConfig* cfg) {
+    WORD batch_vks[MAX_LANES];
+    bool batch_downs[MAX_LANES];
+    int count = 0;
     for (int i = 0; i < cfg->lane_count; i++) {
         if (cfg->lanes[i].is_pressed) {
-            send_key_event(cfg->lanes[i].vk, false);
+            batch_vks[count] = cfg->lanes[i].vk;
+            batch_downs[count] = false;
+            count++;
             cfg->lanes[i].is_pressed = false;
         }
+    }
+    if (count > 0) {
+        send_key_batch(batch_vks, batch_downs, count);
     }
 }
 
@@ -605,17 +657,38 @@ void run_player(AppConfig* cfg) {
             process_delayed_events(t_now.QuadPart);
         }
 
-        // 2. Direct memory pixel inspection (offset = (line_y * width + x) * 4)
+        // 2. Direct memory pixel inspection with multi-pixel neighborhood probe
+        WORD batch_vks[MAX_LANES * 2];
+        bool batch_downs[MAX_LANES * 2];
+        int batch_count = 0;
+        LONGLONG tap_hold_ticks = (freq.QuadPart * 12) / 1000; // 12ms minimum hold for debounced tap
+
         for (int i = 0; i < cfg->lane_count; i++) {
             int x = cfg->lanes[i].x;
             if (x < 0 || x >= width) continue;
 
             int offset = (line_y * width + x) * 4;
-            int b = pBits[offset];
-            int g = pBits[offset + 1];
-            int r = pBits[offset + 2];
+            int max_val = pBits[offset] + pBits[offset + 1] + pBits[offset + 2];
 
-            bool is_active = ((r + g + b) > thresh_sums[i]);
+            // Sample adjacent horizontal pixels to prevent misses on narrow lanes or subpixel anti-aliasing
+            if (x > 0) {
+                int off_l = offset - 4;
+                int val_l = pBits[off_l] + pBits[off_l + 1] + pBits[off_l + 2];
+                if (val_l > max_val) max_val = val_l;
+            }
+            if (x < width - 1) {
+                int off_r = offset + 4;
+                int val_r = pBits[off_r] + pBits[off_r + 1] + pBits[off_r + 2];
+                if (val_r > max_val) max_val = val_r;
+            }
+            // Vertical check if detection strip has height > 1
+            if (line_y + 1 < ctx.height) {
+                int off_d = ((line_y + 1) * width + x) * 4;
+                int val_d = pBits[off_d] + pBits[off_d + 1] + pBits[off_d + 2];
+                if (val_d > max_val) max_val = val_d;
+            }
+
+            bool is_active = (max_val > thresh_sums[i]);
             bool was_active = cfg->lanes[i].is_pressed;
 
             if (hold_mode) {
@@ -623,14 +696,18 @@ void run_player(AppConfig* cfg) {
                     if (delay_ticks > 0) {
                         queue_delayed_event(t_now.QuadPart + delay_ticks, cfg->lanes[i].vk, true);
                     } else {
-                        send_key_event(cfg->lanes[i].vk, true);
+                        batch_vks[batch_count] = cfg->lanes[i].vk;
+                        batch_downs[batch_count] = true;
+                        batch_count++;
                     }
                     cfg->lanes[i].is_pressed = true;
                 } else if (!is_active && was_active) {
                     if (delay_ticks > 0) {
                         queue_delayed_event(t_now.QuadPart + delay_ticks, cfg->lanes[i].vk, false);
                     } else {
-                        send_key_event(cfg->lanes[i].vk, false);
+                        batch_vks[batch_count] = cfg->lanes[i].vk;
+                        batch_downs[batch_count] = false;
+                        batch_count++;
                     }
                     cfg->lanes[i].is_pressed = false;
                 }
@@ -638,16 +715,27 @@ void run_player(AppConfig* cfg) {
                 if (is_active && !was_active) {
                     if (delay_ticks > 0) {
                         queue_delayed_event(t_now.QuadPart + delay_ticks, cfg->lanes[i].vk, true);
-                        queue_delayed_event(t_now.QuadPart + delay_ticks, cfg->lanes[i].vk, false);
+                        queue_delayed_event(t_now.QuadPart + delay_ticks + tap_hold_ticks, cfg->lanes[i].vk, false);
                     } else {
-                        send_key_event(cfg->lanes[i].vk, true);
-                        send_key_event(cfg->lanes[i].vk, false);
+                        batch_vks[batch_count] = cfg->lanes[i].vk;
+                        batch_downs[batch_count] = true;
+                        batch_count++;
                     }
                     cfg->lanes[i].is_pressed = true;
                 } else if (!is_active && was_active) {
+                    if (delay_ticks == 0) {
+                        batch_vks[batch_count] = cfg->lanes[i].vk;
+                        batch_downs[batch_count] = false;
+                        batch_count++;
+                    }
                     cfg->lanes[i].is_pressed = false;
                 }
             }
+        }
+
+        // Atomically dispatch all concurrent key events in this frame!
+        if (batch_count > 0) {
+            send_key_batch(batch_vks, batch_downs, batch_count);
         }
 
         frame_count++;

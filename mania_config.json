@@ -1,39 +1,57 @@
 {
   "preset_name": "WhiteCat Skin 23 Speed (Default)",
   "bbox": [
-    680,
-    982,
-    1226,
-    983
+    608,
+    942,
+    1314,
+    943
   ],
   "judgement_line": 0,
   "global_threshold": 30,
-  "input_delay_ms": 0,
-  "delay_ms": 0,
-  "key_count": 4,
+  "input_delay_ms": 6,
+  "delay_ms": 6,
+  "key_count": 7,
   "lanes": [
     {
       "name": "Lane 1",
-      "x": 68,
-      "key": "q",
+      "x": 50,
+      "key": "s",
       "threshold": 30
     },
     {
       "name": "Lane 2",
-      "x": 204,
-      "key": "w",
+      "x": 151,
+      "key": "d",
       "threshold": 30
     },
     {
       "name": "Lane 3",
-      "x": 341,
-      "key": "[",
+      "x": 252,
+      "key": "f",
       "threshold": 30
     },
     {
       "name": "Lane 4",
-      "x": 477,
-      "key": "]",
+      "x": 353,
+      "key": "space",
+      "threshold": 30
+    },
+    {
+      "name": "Lane 5",
+      "x": 453,
+      "key": "j",
+      "threshold": 30
+    },
+    {
+      "name": "Lane 6",
+      "x": 554,
+      "key": "k",
+      "threshold": 30
+    },
+    {
+      "name": "Lane 7",
+      "x": 655,
+      "key": "l",
       "threshold": 30
     }
   ],

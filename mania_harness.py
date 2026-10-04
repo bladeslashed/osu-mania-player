@@ -20,6 +20,7 @@ Features:
 import os
 import sys
 import re
+import ast
 import time
 import json
 import shutil
@@ -164,7 +165,8 @@ DEFAULT_KEY_LAYOUTS = {
 
 ALL_20_KEYS = [
     "q", "w", "e", "r", "t", "y", "u", "i", "o", "p",
-    "a", "s", "d", "f", "g", "h", "j", "k", "l", ";"
+    "a", "s", "d", "f", "g", "h", "j", "k", "l", ";",
+    "z", "x", "c", "v", "b", "n", "m", ",", ".", "/", "-", "="
 ]
 
 
@@ -1822,11 +1824,26 @@ class ManiaHarnessApp:
                         loaded_count = len(l_vals)
 
                 # Parse dynamic KEYS = [...]
-                m_keys = re.search(r"^KEYS\s*=\s*\[([^\]]+)\]", content, re.MULTILINE)
+                m_keys = re.search(r"^KEYS\s*=\s*(.+)$", content, re.MULTILINE)
                 if m_keys:
-                    k_vals = [re.sub(r"['\"\s]", "", k).lower() for k in m_keys.group(1).split(",") if k.strip()]
-                    if k_vals:
-                        loaded_keys = k_vals
+                    k_line = m_keys.group(1).strip()
+                    s_idx = k_line.find('[')
+                    e_idx = k_line.rfind(']')
+                    if s_idx != -1 and e_idx > s_idx:
+                        raw_keys_str = k_line[s_idx:e_idx + 1]
+                        try:
+                            parsed_k = ast.literal_eval(raw_keys_str)
+                            if isinstance(parsed_k, (list, tuple)):
+                                loaded_keys = [str(k).lower().strip() for k in parsed_k]
+                        except Exception:
+                            try:
+                                parsed_k = json.loads(raw_keys_str)
+                                if isinstance(parsed_k, list):
+                                    loaded_keys = [str(k).lower().strip() for k in parsed_k]
+                            except Exception:
+                                k_vals = re.findall(r"""['"]([^'"]+)['"]""", raw_keys_str)
+                                if k_vals:
+                                    loaded_keys = [k.lower().strip() for k in k_vals]
 
                 # If dynamic arrays weren't found, check LANE1..LANE20
                 if not loaded_lanes:
@@ -1958,7 +1975,7 @@ class ManiaHarnessApp:
                 content = f"LANES = {lanes_repr}\n" + content
 
             if re.search(r"^KEYS\s*=", content, re.MULTILINE):
-                content = re.sub(r"^(KEYS\s*=\s*).*$", rf"\g<1>{keys_repr}", content, flags=re.MULTILINE)
+                content = re.sub(r"^(KEYS\s*=\s*).*$", lambda m: f"{m.group(1)}{keys_repr}", content, flags=re.MULTILINE)
             else:
                 content = f"KEYS = {keys_repr}\n" + content
 

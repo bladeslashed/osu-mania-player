@@ -46,19 +46,19 @@ SCREENPATH = SCREENSHOT_PATH
 # Calibrated coordinates (synced with mania_config.json & GUI)
 # -------------------------------------------------------------
 JUDGEMENENT_LINE = 0
-INPUT_DELAY_MS = 0
-DELAY_MS = 0
-LANE1 = 68
-LANE2 = 204
-LANE3 = 341
-LANE4 = 477
-LANES = [68, 204, 341, 477]
-BBOX = (680, 982, 1226, 983)
-KEY1 = "q"
-KEY2 = "w"
-KEY3 = "["
-KEY4 = "]"
-KEYS = ["q", "w", "[", "]"]
+INPUT_DELAY_MS = 6
+DELAY_MS = 6
+LANE1 = 50
+LANE2 = 151
+LANE3 = 252
+LANE4 = 353
+LANES = [50, 151, 252, 353, 453, 554, 655]
+BBOX = (608, 942, 1314, 943)
+KEY1 = "s"
+KEY2 = "d"
+KEY3 = "f"
+KEY4 = "space"
+KEYS = ["s", "d", "f", "space", "j", "k", "l"]
 
 p_status = True
 is_running = False
@@ -66,7 +66,7 @@ is_running = False
 # Default preset configuration
 DEFAULT_CONFIG = {
     "preset_name": "WhiteCat Skin 23 Speed (Default)",
-    "bbox": [680, 982, 1226, 983],
+    "bbox": [608, 942, 1314, 943],
     "judgement_line": 0,
     "input_delay_ms": 0,
     "delay_ms": 0,
@@ -89,17 +89,95 @@ DEFAULT_CONFIG = {
     }
 }
 
+KEY_ALIASES = {
+    "semicolon": ";",
+    "bracketleft": "[",
+    "bracketright": "]",
+    "quote": "'",
+    "comma": ",",
+    "period": ".",
+    "slash": "/",
+    "backslash": "\\",
+    "minus": "-",
+    "equal": "=",
+    "equals": "=",
+    "capslock": "caps_lock",
+    "escape": "esc",
+}
+
+try:
+    if sys.platform == "win32":
+        import pynput.keyboard._win32 as _pynput_win32
+        import ctypes
+        _HAS_WIN32_BATCH = True
+    else:
+        _HAS_WIN32_BATCH = False
+except Exception:
+    _HAS_WIN32_BATCH = False
+
+
+class FastKeyBinder:
+    """High-performance atomic input injector that pre-resolves keys and batches concurrent chords in a single OS call."""
+    def __init__(self, controller, parsed_keys):
+        self.controller = controller
+        self.keys = list(parsed_keys)
+        self.fast_down = []
+        self.fast_up = []
+        self.can_batch = _HAS_WIN32_BATCH
+        if self.can_batch:
+            try:
+                for k in self.keys:
+                    res = controller._resolve(k)
+                    p_down = res._parameters(True)
+                    p_up = res._parameters(False)
+                    self.fast_down.append(_pynput_win32.KEYBDINPUT(**p_down))
+                    self.fast_up.append(_pynput_win32.KEYBDINPUT(**p_up))
+            except Exception:
+                self.can_batch = False
+
+    def send_batch(self, events):
+        """events is a list of (lane_index, is_down_bool)"""
+        if not events:
+            return
+        if self.can_batch:
+            try:
+                n = len(events)
+                arr = (_pynput_win32.INPUT * n)()
+                for i, (idx, is_down) in enumerate(events):
+                    arr[i].type = _pynput_win32.INPUT.KEYBOARD
+                    arr[i].value.ki = self.fast_down[idx] if is_down else self.fast_up[idx]
+                _pynput_win32.SendInput(n, arr, ctypes.sizeof(_pynput_win32.INPUT))
+                return
+            except Exception:
+                pass
+        # Fallback to standard pynput controller
+        for idx, is_down in events:
+            try:
+                k = self.keys[idx]
+                if is_down:
+                    self.controller.press(k)
+                else:
+                    self.controller.release(k)
+            except Exception:
+                pass
+
+    def release_all(self):
+        all_events = [(i, False) for i in range(len(self.keys))]
+        self.send_batch(all_events)
+
 
 def parse_key(key_val):
-    """Converts key string (e.g. 'q', 'space', 'left', 'up') into pynput Key object or char."""
+    """Converts key string (e.g. 'q', 'space', 'left', 'up', 'bracketright') into pynput Key object or char."""
     if not isinstance(key_val, str) or len(key_val) == 0:
         return key_val
-    if len(key_val) == 1:
-        return key_val
     normalized = key_val.lower().strip()
+    if normalized in KEY_ALIASES:
+        normalized = KEY_ALIASES[normalized]
+    if len(normalized) == 1:
+        return normalized
     if hasattr(Key, normalized):
         return getattr(Key, normalized)
-    return key_val
+    return normalized
 
 
 def key_to_str(key_obj):
@@ -287,13 +365,17 @@ class ManiaPlayer:
             print(f"[Screenshot Error] {e}")
 
     def release_all_keys(self):
+        if hasattr(self, "key_binder") and self.key_binder:
+            self.key_binder.release_all()
+        else:
+            for lane in self.lanes:
+                k = lane["parsed_key"]
+                try:
+                    self.keyboard.release(k)
+                except Exception:
+                    pass
         for lane in self.lanes:
-            k = lane["parsed_key"]
-            try:
-                self.keyboard.release(k)
-            except Exception:
-                pass
-            self.pressed_state[k] = False
+            self.pressed_state[lane["parsed_key"]] = False
 
     def run_mss_loop(self):
         show_fps = self.config.get("show_fps", True)
@@ -302,21 +384,32 @@ class ManiaPlayer:
         last_time = time.time()
 
         stride = self.width * 4
-        y_off = self.judgement_line * stride
+        jl = self.judgement_line
         num_lanes = len(self.lanes)
+        keys = [lane["parsed_key"] for lane in self.lanes]
+        self.key_binder = FastKeyBinder(self.keyboard, keys)
+
         lane_byte_offsets = []
+        offsets_l = []
+        offsets_r = []
+        offsets_d = []
         thresh_sums = []
-        keys = []
+
         for lane in self.lanes:
             x_clamped = min(max(0, int(lane.get("x", 0))), self.width - 1)
-            lane_byte_offsets.append(y_off + (x_clamped * 4))
+            base = (jl * stride) + (x_clamped * 4)
+            lane_byte_offsets.append(base)
+            offsets_l.append(base - 4 if x_clamped > 0 else base)
+            offsets_r.append(base + 4 if x_clamped < self.width - 1 else base)
+            offsets_d.append(((jl + 1) * stride) + (x_clamped * 4) if jl + 1 < self.height else base)
             th = float(lane.get("threshold", self.global_threshold))
             thresh_sums.append(th * 3.0)
-            keys.append(lane["parsed_key"])
 
         lane_byte_offsets = tuple(lane_byte_offsets)
+        offsets_l = tuple(offsets_l)
+        offsets_r = tuple(offsets_r)
+        offsets_d = tuple(offsets_d)
         thresh_sums = tuple(thresh_sums)
-        keys = tuple(keys)
         pressed_states = [False] * num_lanes
 
         delayed_events = collections.deque()
@@ -332,18 +425,12 @@ class ManiaPlayer:
             # Process due delayed events before screen grab
             if delay_sec > 0 and delayed_events:
                 t_now = time.perf_counter()
+                due_batch = []
                 while delayed_events and delayed_events[0][0] <= t_now:
-                    _, act, k = delayed_events.popleft()
-                    if act == 1:
-                        try:
-                            self.keyboard.press(k)
-                        except Exception:
-                            pass
-                    else:
-                        try:
-                            self.keyboard.release(k)
-                        except Exception:
-                            pass
+                    _, act, idx = delayed_events.popleft()
+                    due_batch.append((idx, act == 1))
+                if due_batch:
+                    self.key_binder.send_batch(due_batch)
 
             shot = self.sct.grab(self.mss_monitor)
             raw = shot.raw
@@ -351,46 +438,48 @@ class ManiaPlayer:
 
             # Process due delayed events immediately after grab
             if delay_sec > 0 and delayed_events:
+                due_batch = []
                 while delayed_events and delayed_events[0][0] <= t_now:
-                    _, act, k = delayed_events.popleft()
-                    if act == 1:
-                        try:
-                            self.keyboard.press(k)
-                        except Exception:
-                            pass
-                    else:
-                        try:
-                            self.keyboard.release(k)
-                        except Exception:
-                            pass
+                    _, act, idx = delayed_events.popleft()
+                    due_batch.append((idx, act == 1))
+                if due_batch:
+                    self.key_binder.send_batch(due_batch)
 
+            instant_batch = []
             for idx in range(num_lanes):
                 off = lane_byte_offsets[idx]
-                hit = (raw[off] + raw[off + 1] + raw[off + 2]) > thresh_sums[idx]
-                k = keys[idx]
+                val = raw[off] + raw[off + 1] + raw[off + 2]
+                off_l = offsets_l[idx]
+                val_l = raw[off_l] + raw[off_l + 1] + raw[off_l + 2]
+                if val_l > val: val = val_l
+                off_r = offsets_r[idx]
+                val_r = raw[off_r] + raw[off_r + 1] + raw[off_r + 2]
+                if val_r > val: val = val_r
+                off_d = offsets_d[idx]
+                val_d = raw[off_d] + raw[off_d + 1] + raw[off_d + 2]
+                if val_d > val: val = val_d
+
+                hit = val > thresh_sums[idx]
 
                 if hit:
                     if not pressed_states[idx]:
                         pressed_states[idx] = True
-                        self.pressed_state[k] = True
+                        self.pressed_state[keys[idx]] = True
                         if delay_sec > 0:
-                            delayed_events.append((t_now + delay_sec, 1, k))
+                            delayed_events.append((t_now + delay_sec, 1, idx))
                         else:
-                            try:
-                                self.keyboard.press(k)
-                            except Exception:
-                                pass
+                            instant_batch.append((idx, True))
                 else:
                     if pressed_states[idx]:
                         pressed_states[idx] = False
-                        self.pressed_state[k] = False
+                        self.pressed_state[keys[idx]] = False
                         if delay_sec > 0:
-                            delayed_events.append((t_now + delay_sec, 0, k))
+                            delayed_events.append((t_now + delay_sec, 0, idx))
                         else:
-                            try:
-                                self.keyboard.release(k)
-                            except Exception:
-                                pass
+                            instant_batch.append((idx, False))
+
+            if instant_batch:
+                self.key_binder.send_batch(instant_batch)
 
             if show_fps:
                 loop_count += 1
@@ -404,6 +493,7 @@ class ManiaPlayer:
                     last_time = now
 
         delayed_events.clear()
+        self.key_binder.release_all()
 
     def run_pil_loop(self):
         show_fps = self.config.get("show_fps", True)
@@ -412,18 +502,18 @@ class ManiaPlayer:
         last_time = time.time()
 
         num_lanes = len(self.lanes)
+        keys = [lane["parsed_key"] for lane in self.lanes]
+        self.key_binder = FastKeyBinder(self.keyboard, keys)
+
         lane_xs = []
         thresh_sums = []
-        keys = []
         for lane in self.lanes:
             lane_xs.append(min(max(0, int(lane.get("x", 0))), self.width - 1))
             th = float(lane.get("threshold", self.global_threshold))
             thresh_sums.append(th * 3.0)
-            keys.append(lane["parsed_key"])
 
         lane_xs = tuple(lane_xs)
         thresh_sums = tuple(thresh_sums)
-        keys = tuple(keys)
         pressed_states = [False] * num_lanes
 
         delayed_events = collections.deque()
@@ -439,51 +529,52 @@ class ManiaPlayer:
             try:
                 t_now = time.perf_counter()
                 if delay_sec > 0 and delayed_events:
+                    due_batch = []
                     while delayed_events and delayed_events[0][0] <= t_now:
-                        _, act, k = delayed_events.popleft()
-                        if act == 1:
-                            try:
-                                self.keyboard.press(k)
-                            except Exception:
-                                pass
-                        else:
-                            try:
-                                self.keyboard.release(k)
-                            except Exception:
-                                pass
+                        _, act, idx = delayed_events.popleft()
+                        due_batch.append((idx, act == 1))
+                    if due_batch:
+                        self.key_binder.send_batch(due_batch)
 
                 img = ImageGrab.grab(bbox=self.bbox)
                 px = img.load()
                 t_now = time.perf_counter()
 
+                instant_batch = []
                 for idx in range(num_lanes):
                     x = lane_xs[idx]
-                    rgb = px[x, self.judgement_line]
-                    hit = (rgb[0] + rgb[1] + rgb[2]) > thresh_sums[idx]
-                    k = keys[idx]
+                    val = sum(px[x, self.judgement_line][:3])
+                    if x > 0:
+                        val_l = sum(px[x - 1, self.judgement_line][:3])
+                        if val_l > val: val = val_l
+                    if x < self.width - 1:
+                        val_r = sum(px[x + 1, self.judgement_line][:3])
+                        if val_r > val: val = val_r
+                    if self.judgement_line + 1 < self.height:
+                        val_d = sum(px[x, self.judgement_line + 1][:3])
+                        if val_d > val: val = val_d
+
+                    hit = val > thresh_sums[idx]
 
                     if hit:
                         if not pressed_states[idx]:
                             pressed_states[idx] = True
-                            self.pressed_state[k] = True
+                            self.pressed_state[keys[idx]] = True
                             if delay_sec > 0:
-                                delayed_events.append((t_now + delay_sec, 1, k))
+                                delayed_events.append((t_now + delay_sec, 1, idx))
                             else:
-                                try:
-                                    self.keyboard.press(k)
-                                except Exception:
-                                    pass
+                                instant_batch.append((idx, True))
                     else:
                         if pressed_states[idx]:
                             pressed_states[idx] = False
-                            self.pressed_state[k] = False
+                            self.pressed_state[keys[idx]] = False
                             if delay_sec > 0:
-                                delayed_events.append((t_now + delay_sec, 0, k))
+                                delayed_events.append((t_now + delay_sec, 0, idx))
                             else:
-                                try:
-                                    self.keyboard.release(k)
-                                except Exception:
-                                    pass
+                                instant_batch.append((idx, False))
+
+                if instant_batch:
+                    self.key_binder.send_batch(instant_batch)
 
                 if show_fps:
                     loop_count += 1
@@ -500,6 +591,7 @@ class ManiaPlayer:
                 time.sleep(0.005)
 
         delayed_events.clear()
+        self.key_binder.release_all()
 
     def run(self):
         self.init_capture()
