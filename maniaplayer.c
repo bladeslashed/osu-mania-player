@@ -29,6 +29,14 @@ typedef struct {
     int global_threshold;
     int input_delay_ms;
     int skill_level;
+    double misread_chance;   // percent chance (0-100) that a note press is misread
+    double misread_ms;       // lane ignores input for this many ms after a misread
+    double stamina_max;      // max clicks in stamina pool (0 = disabled)
+    double stamina_regen;    // stamina regenerated per 20 ms
+    double strain_step_pct;    // every X% stamina lost (0 = disabled)
+    double strain_misread_pct; // misread chance increases by y%
+    double strain_skill_ms;    // skill delay increases by z ms
+    double strain_regen_pct;   // stamina regen decreased by Z%
     char input_mode[16]; // "hold" or "tap"
     Lane lanes[MAX_LANES];
     int lane_count;
@@ -76,6 +84,14 @@ void set_default_config(AppConfig* cfg) {
     cfg->global_threshold = 30;
     cfg->input_delay_ms = 0;
     cfg->skill_level = 0;
+    cfg->misread_chance = 0;
+    cfg->misread_ms = 0;
+    cfg->stamina_max = 0;
+    cfg->stamina_regen = 0.0;
+    cfg->strain_step_pct = 0;
+    cfg->strain_misread_pct = 0;
+    cfg->strain_skill_ms = 0;
+    cfg->strain_regen_pct = 0;
     strcpy(cfg->input_mode, "hold");
 
     cfg->lane_count = 4;
@@ -106,6 +122,23 @@ void set_default_config(AppConfig* cfg) {
     cfg->lanes[3].vk = resolve_vk("]");
     cfg->lanes[3].threshold = 30;
     cfg->lanes[3].is_pressed = false;
+}
+
+// Reads a numeric value for "key" from a JSON buffer. Returns true on success.
+static bool json_get_number(const char* buf, const char* key, double* out) {
+    char needle[64];
+    snprintf(needle, sizeof(needle), "\"%s\"", key);
+    const char* p = strstr(buf, needle);
+    if (!p) return false;
+    p += strlen(needle);
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != ':') return false;
+    p++;
+    char* endp = NULL;
+    double v = strtod(p, &endp);
+    if (endp == p) return false;
+    *out = v;
+    return true;
 }
 
 // Simple JSON config loader
@@ -174,6 +207,34 @@ bool load_config_file(AppConfig* cfg, const char* filename) {
         }
     }
 
+    {
+        double dv = 0.0;
+        if (json_get_number(buf, "misread_chance", &dv)) {
+            cfg->misread_chance = dv < 0.0 ? 0.0 : (dv > 100.0 ? 100.0 : dv);
+        }
+        if (json_get_number(buf, "misread_ms", &dv)) {
+            cfg->misread_ms = dv < 0.0 ? 0.0 : dv;
+        }
+        if (json_get_number(buf, "stamina_max", &dv)) {
+            cfg->stamina_max = dv < 0.0 ? 0.0 : dv;
+        }
+        if (json_get_number(buf, "stamina_regen", &dv)) {
+            cfg->stamina_regen = dv < 0.0 ? 0.0 : dv;
+        }
+        if (json_get_number(buf, "strain_step_pct", &dv)) {
+            cfg->strain_step_pct = dv < 0.0 ? 0.0 : (dv > 100.0 ? 100.0 : dv);
+        }
+        if (json_get_number(buf, "strain_misread_pct", &dv)) {
+            cfg->strain_misread_pct = dv < 0.0 ? 0.0 : (dv > 100.0 ? 100.0 : dv);
+        }
+        if (json_get_number(buf, "strain_skill_ms", &dv)) {
+            cfg->strain_skill_ms = dv < 0.0 ? 0.0 : dv;
+        }
+        if (json_get_number(buf, "strain_regen_pct", &dv)) {
+            cfg->strain_regen_pct = dv < 0.0 ? 0.0 : (dv > 100.0 ? 100.0 : dv);
+        }
+    }
+
     char* pMode = strstr(buf, "\"input_mode\"");
     if (pMode) {
         char m[16] = {0};
@@ -238,6 +299,14 @@ bool save_config_file(const AppConfig* cfg, const char* filename) {
     fprintf(f, "  \"input_delay_ms\": %d,\n", cfg->input_delay_ms);
     fprintf(f, "  \"delay_ms\": %d,\n", cfg->input_delay_ms);
     fprintf(f, "  \"skill_level\": %d,\n", cfg->skill_level);
+    fprintf(f, "  \"misread_chance\": %.4g,\n", cfg->misread_chance);
+    fprintf(f, "  \"misread_ms\": %.4g,\n", cfg->misread_ms);
+    fprintf(f, "  \"stamina_max\": %.4g,\n", cfg->stamina_max);
+    fprintf(f, "  \"stamina_regen\": %.4g,\n", cfg->stamina_regen);
+    fprintf(f, "  \"strain_step_pct\": %.4g,\n", cfg->strain_step_pct);
+    fprintf(f, "  \"strain_misread_pct\": %.4g,\n", cfg->strain_misread_pct);
+    fprintf(f, "  \"strain_skill_ms\": %.4g,\n", cfg->strain_skill_ms);
+    fprintf(f, "  \"strain_regen_pct\": %.4g,\n", cfg->strain_regen_pct);
     fprintf(f, "  \"global_threshold\": %d,\n", cfg->global_threshold);
     fprintf(f, "  \"input_mode\": \"%s\",\n", cfg->input_mode);
     fprintf(f, "  \"lanes\": [\n");
@@ -421,7 +490,7 @@ void save_screenshot_bmp(const CaptureContext* ctx, const char* filename) {
 // Interactive Console Menu
 void print_menu(const AppConfig* cfg) {
     printf("\n=================================================================\n");
-    printf("         OSU!MANIA PLAYER V1.2.3 - NATIVE C ENGINE\n");
+    printf("         OSU!MANIA PLAYER V1.3.0 - NATIVE C ENGINE\n");
     printf("=================================================================\n");
     printf("  BBox Detection:   (%d, %d, %d, %d) [Width: %d, Height: %d]\n",
         cfg->bbox_left, cfg->bbox_top, cfg->bbox_right, cfg->bbox_bottom,
@@ -429,6 +498,22 @@ void print_menu(const AppConfig* cfg) {
     printf("  Judgement Line:   Y = %d\n", cfg->judgement_line);
     printf("  Input Delay:      %d ms\n", cfg->input_delay_ms);
     printf("  Skill Level:      %d ms (Variance: ±%d ms)\n", cfg->skill_level, cfg->skill_level);
+    if (cfg->misread_chance > 0) {
+        printf("  Misread:          %.4g%% chance, ignores lane for %.4g ms\n", cfg->misread_chance, cfg->misread_ms);
+    } else {
+        printf("  Misread:          Off\n");
+    }
+    if (cfg->stamina_max > 0) {
+        printf("  Stamina:          %.4g max clicks, +%.4g per 20 ms\n", cfg->stamina_max, cfg->stamina_regen);
+    } else {
+        printf("  Stamina:          Off\n");
+    }
+    if (cfg->strain_step_pct > 0) {
+        printf("  Strain:           Every %.4g%% stam lost: +%.4g%% misread, +%.4g ms jitter, -%.4g%% regen\n",
+            cfg->strain_step_pct, cfg->strain_misread_pct, cfg->strain_skill_ms, cfg->strain_regen_pct);
+    } else {
+        printf("  Strain:           Off\n");
+    }
     printf("  Input Mode:       %s\n", _stricmp(cfg->input_mode, "hold") == 0 ? "HOLD (Default)" : "TAP");
     printf("  Lanes (%d):\n", cfg->lane_count);
     for (int i = 0; i < cfg->lane_count; i++) {
@@ -442,6 +527,9 @@ void print_menu(const AppConfig* cfg) {
     printf("  [4] Change Global Threshold\n");
     printf("  [5] Change Input Delay (ms)\n");
     printf("  [6] Change Skill Level Variance (±ms)\n");
+    printf("  [M] Configure Misread (chance %% + ignore ms)\n");
+    printf("  [T] Configure Stamina (max clicks + regen per 20ms)\n");
+    printf("  [R] Configure Strain (stamina depletion debuffs)\n");
     printf("  [7] Toggle Input Mode (Hold vs Tap)\n");
     printf("  [8] Reset to Default WhiteCat 23-Speed Preset\n");
     printf("  [9] Save Configuration to %s\n", CONFIG_FILE);
@@ -548,6 +636,71 @@ void edit_bbox_menu(AppConfig* cfg) {
     }
 }
 
+// ---- Skill simulation: Misread, Stamina & Strain ----
+static LONGLONG g_misread_until[MAX_LANES];
+static double g_stamina = 0.0;
+static LONGLONG g_stamina_last = 0;
+static int g_eff_skill_level = 0;
+
+static void skill_gate_init(const AppConfig* cfg, LONGLONG now) {
+    for (int i = 0; i < MAX_LANES; i++) g_misread_until[i] = 0;
+    g_stamina = (double)cfg->stamina_max;
+    g_stamina_last = now;
+    g_eff_skill_level = cfg->skill_level;
+}
+
+// Returns false when the note press on this lane should be ignored.
+static bool skill_allow_press(const AppConfig* cfg, int lane, LONGLONG now, LONGLONG freq) {
+    double eff_misread_chance = cfg->misread_chance;
+    g_eff_skill_level = cfg->skill_level;
+
+    if (cfg->stamina_max > 0) {
+        double dt_sec = (double)(now - g_stamina_last) / (double)freq;
+        g_stamina_last = now;
+
+        double lost_pct = (1.0 - (g_stamina / (double)cfg->stamina_max)) * 100.0;
+        if (lost_pct < 0.0) lost_pct = 0.0;
+        int steps = (cfg->strain_step_pct > 0) ? (int)(lost_pct / cfg->strain_step_pct) : 0;
+
+        double regen_factor = 1.0 - ((double)steps * (cfg->strain_regen_pct / 100.0));
+        if (regen_factor < 0.0) regen_factor = 0.0;
+        double eff_regen_per_sec = cfg->stamina_regen * 50.0 * regen_factor;
+
+        g_stamina += dt_sec * eff_regen_per_sec;
+        if (g_stamina > cfg->stamina_max) g_stamina = cfg->stamina_max;
+
+        lost_pct = (1.0 - (g_stamina / cfg->stamina_max)) * 100.0;
+        if (lost_pct < 0.0) lost_pct = 0.0;
+        steps = (cfg->strain_step_pct > 0) ? (int)(lost_pct / cfg->strain_step_pct) : 0;
+
+        eff_misread_chance = cfg->misread_chance + (steps * cfg->strain_misread_pct);
+        if (eff_misread_chance < 0.0) eff_misread_chance = 0.0;
+        if (eff_misread_chance > 100.0) eff_misread_chance = 100.0;
+
+        g_eff_skill_level = cfg->skill_level + (int)(steps * cfg->strain_skill_ms);
+        if (g_eff_skill_level < 0) g_eff_skill_level = 0;
+    }
+
+    if (eff_misread_chance > 0.0) {
+        if (now < g_misread_until[lane]) return false;
+        if (((double)rand() / (double)RAND_MAX * 100.0) < eff_misread_chance) {
+            g_misread_until[lane] = now + ((LONGLONG)(cfg->misread_ms * (double)freq)) / 1000;
+            return false;
+        }
+    }
+
+    if (cfg->stamina_max > 0) {
+        if (g_stamina < 1.0) return false;
+        g_stamina -= 1.0;
+        double lost_pct = (1.0 - (g_stamina / cfg->stamina_max)) * 100.0;
+        if (lost_pct < 0.0) lost_pct = 0.0;
+        int steps = (cfg->strain_step_pct > 0) ? (int)(lost_pct / cfg->strain_step_pct) : 0;
+        g_eff_skill_level = cfg->skill_level + (int)(steps * cfg->strain_skill_ms);
+        if (g_eff_skill_level < 0) g_eff_skill_level = 0;
+    }
+    return true;
+}
+
 // Main high-performance gameplay loop in C
 void run_player(AppConfig* cfg) {
     CaptureContext ctx;
@@ -563,7 +716,7 @@ void run_player(AppConfig* cfg) {
     }
 
     printf("\n=================================================================\n");
-    printf("         OSU!MANIA PLAYER V1.2.3 (NATIVE C) - RUNNING\n");
+    printf("         OSU!MANIA PLAYER V1.3.0 (NATIVE C) - RUNNING\n");
     printf("  Controls:\n");
     printf("    [F] Start / Play\n");
     printf("    [S] Stop / Pause\n");
@@ -590,6 +743,7 @@ void run_player(AppConfig* cfg) {
     WORD lane_vks[MAX_LANES];
     LONGLONG lane_hold_ticks[MAX_LANES];
     bool lane_valid[MAX_LANES];
+    bool lane_skipped[MAX_LANES];
 
     for (int i = 0; i < cfg->lane_count; i++) {
         int lx = cfg->lanes[i].x;
@@ -603,10 +757,17 @@ void run_player(AppConfig* cfg) {
             lane_valid[i] = false;
         }
         lane_hold_ticks[i] = 0;
+        lane_skipped[i] = false;
     }
 
     g_delayed_count = 0;
-    bool has_delay_or_skill = (cfg->input_delay_ms > 0 || cfg->skill_level > 0);
+    bool has_delay_or_skill = (cfg->input_delay_ms > 0 || cfg->skill_level > 0 || cfg->strain_skill_ms > 0);
+    bool skill_gate = (cfg->misread_chance > 0 || cfg->stamina_max > 0 || cfg->strain_step_pct > 0);
+    {
+        LARGE_INTEGER t_init;
+        QueryPerformanceCounter(&t_init);
+        skill_gate_init(cfg, t_init.QuadPart);
+    }
 
     while (g_program_active) {
         // Hotkey polling via GetAsyncKeyState
@@ -681,11 +842,18 @@ void run_player(AppConfig* cfg) {
 
             if (hold_mode) {
                 if (is_active && !was_active) {
+                    if (skill_gate && !skill_allow_press(cfg, i, t_now.QuadPart, freq.QuadPart)) {
+                        lane_skipped[i] = true;
+                        cfg->lanes[i].is_pressed = true;
+                        continue;
+                    }
+                    lane_skipped[i] = false;
                     if (has_delay_or_skill) {
                         int var_ms = 0;
-                        if (cfg->skill_level > 0) {
-                            int range = (cfg->skill_level * 2) + 1;
-                            var_ms = (rand() % range) - cfg->skill_level;
+                        int eff_sk = (g_eff_skill_level >= 0) ? g_eff_skill_level : cfg->skill_level;
+                        if (eff_sk > 0) {
+                            int range = (eff_sk * 2) + 1;
+                            var_ms = (rand() % range) - eff_sk;
                         }
                         int eff_delay_ms = cfg->input_delay_ms + var_ms;
                         if (eff_delay_ms < 0) eff_delay_ms = 0;
@@ -714,6 +882,11 @@ void run_player(AppConfig* cfg) {
                     }
                     cfg->lanes[i].is_pressed = true;
                 } else if (!is_active && was_active) {
+                    if (lane_skipped[i]) {
+                        lane_skipped[i] = false;
+                        cfg->lanes[i].is_pressed = false;
+                        continue;
+                    }
                     if (has_delay_or_skill) {
                         LONGLONG eff_ticks = lane_hold_ticks[i];
                         if (eff_ticks > 0) {
@@ -740,11 +913,16 @@ void run_player(AppConfig* cfg) {
                 }
             } else { // Tap mode
                 if (is_active && !was_active) {
+                    if (skill_gate && !skill_allow_press(cfg, i, t_now.QuadPart, freq.QuadPart)) {
+                        cfg->lanes[i].is_pressed = true;
+                        continue;
+                    }
                     if (has_delay_or_skill) {
                         int var_ms = 0;
-                        if (cfg->skill_level > 0) {
-                            int range = (cfg->skill_level * 2) + 1;
-                            var_ms = (rand() % range) - cfg->skill_level;
+                        int eff_sk = (g_eff_skill_level >= 0) ? g_eff_skill_level : cfg->skill_level;
+                        if (eff_sk > 0) {
+                            int range = (eff_sk * 2) + 1;
+                            var_ms = (rand() % range) - eff_sk;
                         }
                         int eff_delay_ms = cfg->input_delay_ms + var_ms;
                         if (eff_delay_ms < 0) eff_delay_ms = 0;
@@ -810,7 +988,8 @@ void run_player(AppConfig* cfg) {
 }
 
 int main() {
-    SetConsoleTitleA("Osu!Mania Player v1.2.3");
+    SetConsoleTitleA("Osu!Mania Player v1.3.0");
+    srand((unsigned)GetTickCount() ^ ((unsigned)GetCurrentProcessId() << 16));
     CreateDirectoryA("presets", NULL);
     CreateDirectoryA("backups", NULL);
     timeBeginPeriod(1);
@@ -855,6 +1034,71 @@ int main() {
                 if (sk > 500) sk = 500;
                 g_config.skill_level = sk;
                 printf("[Updated] Skill level set to ±%d ms variance\n", g_config.skill_level);
+            }
+        } else if (choice == 'm' || choice == 'M') {
+            printf("Enter misread chance %% (0-100, 0 = off) [%.4g]: ", g_config.misread_chance);
+            if (fgets(line, sizeof(line), stdin) && line[0] != '\n') {
+                double c = atof(line);
+                if (c < 0.0) c = 0.0;
+                if (c > 100.0) c = 100.0;
+                g_config.misread_chance = c;
+            }
+            printf("Enter ignore duration in ms (0-5000) [%.4g]: ", g_config.misread_ms);
+            if (fgets(line, sizeof(line), stdin) && line[0] != '\n') {
+                double d = atof(line);
+                if (d < 0.0) d = 0.0;
+                if (d > 5000.0) d = 5000.0;
+                g_config.misread_ms = d;
+            }
+            printf("[Updated] Misread: %.4g%% chance, ignores lane for %.4g ms\n", g_config.misread_chance, g_config.misread_ms);
+        } else if (choice == 't' || choice == 'T') {
+            printf("Enter stamina max clicks (0 = off) [%.4g]: ", g_config.stamina_max);
+            if (fgets(line, sizeof(line), stdin) && line[0] != '\n') {
+                double m = atof(line);
+                if (m < 0.0) m = 0.0;
+                g_config.stamina_max = m;
+            }
+            printf("Enter stamina regeneration per 20 ms [%.4g]: ", g_config.stamina_regen);
+            if (fgets(line, sizeof(line), stdin) && line[0] != '\n') {
+                double r = atof(line);
+                if (r < 0.0) r = 0.0;
+                g_config.stamina_regen = r;
+            }
+            printf("[Updated] Stamina: %.4g max clicks, +%.4g per 20 ms\n", g_config.stamina_max, g_config.stamina_regen);
+        } else if (choice == 'r' || choice == 'R') {
+            printf("Enter strain step %% lost stamina (0 = off) [%.4g]: ", g_config.strain_step_pct);
+            if (fgets(line, sizeof(line), stdin) && line[0] != '\n') {
+                double p = atof(line);
+                if (p < 0.0) p = 0.0;
+                if (p > 100.0) p = 100.0;
+                g_config.strain_step_pct = p;
+            }
+            if (g_config.strain_step_pct > 0.0) {
+                printf("Enter misread chance increase %% per step [%.4g]: ", g_config.strain_misread_pct);
+                if (fgets(line, sizeof(line), stdin) && line[0] != '\n') {
+                    double m = atof(line);
+                    if (m < 0.0) m = 0.0;
+                    if (m > 100.0) m = 100.0;
+                    g_config.strain_misread_pct = m;
+                }
+                printf("Enter skill jitter delay increase in ms per step [%.4g]: ", g_config.strain_skill_ms);
+                if (fgets(line, sizeof(line), stdin) && line[0] != '\n') {
+                    double s = atof(line);
+                    if (s < 0.0) s = 0.0;
+                    if (s > 500.0) s = 500.0;
+                    g_config.strain_skill_ms = s;
+                }
+                printf("Enter stamina regen reduction %% per step [%.4g]: ", g_config.strain_regen_pct);
+                if (fgets(line, sizeof(line), stdin) && line[0] != '\n') {
+                    double r = atof(line);
+                    if (r < 0.0) r = 0.0;
+                    if (r > 100.0) r = 100.0;
+                    g_config.strain_regen_pct = r;
+                }
+                printf("[Updated] Strain: Every %.4g%% lost -> +%.4g%% misread, +%.4g ms jitter, -%.4g%% regen\n",
+                    g_config.strain_step_pct, g_config.strain_misread_pct, g_config.strain_skill_ms, g_config.strain_regen_pct);
+            } else {
+                printf("[Updated] Strain disabled.\n");
             }
         } else if (choice == '7') {
             if (_stricmp(g_config.input_mode, "hold") == 0) {

@@ -1,58 +1,40 @@
 {
   "preset_name": "WhiteCat Skin 23 Speed (Default)",
   "bbox": [
-    608,
-    942,
-    1314,
-    943
+    746,
+    392,
+    1174,
+    393
   ],
   "judgement_line": 0,
   "global_threshold": 30,
-  "input_delay_ms": 6,
-  "delay_ms": 6,
-  "skill_level": 0,
-  "key_count": 7,
+  "input_delay_ms": 290,
+  "delay_ms": 290,
+  "skill_level": 10,
+  "key_count": 4,
   "lanes": [
     {
       "name": "Lane 1",
-      "x": 50,
-      "key": "s",
+      "x": 53,
+      "key": "q",
       "threshold": 30
     },
     {
       "name": "Lane 2",
-      "x": 151,
-      "key": "d",
+      "x": 160,
+      "key": "w",
       "threshold": 30
     },
     {
       "name": "Lane 3",
-      "x": 252,
-      "key": "f",
+      "x": 267,
+      "key": "[",
       "threshold": 30
     },
     {
       "name": "Lane 4",
-      "x": 353,
-      "key": "space",
-      "threshold": 30
-    },
-    {
-      "name": "Lane 5",
-      "x": 453,
-      "key": "j",
-      "threshold": 30
-    },
-    {
-      "name": "Lane 6",
-      "x": 554,
-      "key": "k",
-      "threshold": 30
-    },
-    {
-      "name": "Lane 7",
-      "x": 655,
-      "key": "l",
+      "x": 374,
+      "key": "]",
       "threshold": 30
     }
   ],
@@ -65,5 +47,14 @@
     "stop": "s",
     "menu": "m",
     "exit": "/"
-  }
+  },
+  "skill_level_ms": 10,
+  "misread_chance": 0,
+  "misread_ms": 0.4,
+  "stamina_max": 100.5,
+  "stamina_regen": 0.4,
+  "strain_step_pct": 1.5,
+  "strain_misread_pct": 0.2,
+  "strain_skill_ms": 0.5,
+  "strain_regen_pct": 0.5
 }

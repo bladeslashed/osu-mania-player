@@ -48,21 +48,29 @@ SCREENPATH = SCREENSHOT_PATH
 # Calibrated coordinates (synced with mania_config.json & GUI)
 # -------------------------------------------------------------
 JUDGEMENENT_LINE = 0
-INPUT_DELAY_MS = 6
-DELAY_MS = 6
-SKILL_LEVEL = 0
+INPUT_DELAY_MS = 290
+DELAY_MS = 290
+SKILL_LEVEL = 10
 SKILL_LEVEL_MS = 0
-LANE1 = 50
-LANE2 = 151
-LANE3 = 252
-LANE4 = 353
-LANES = [50, 151, 252, 353, 453, 554, 655]
-BBOX = (608, 942, 1314, 943)
-KEY1 = "s"
-KEY2 = "d"
-KEY3 = "f"
-KEY4 = "space"
-KEYS = ["s", "d", "f", "space", "j", "k", "l"]
+MISREAD_CHANCE = 0
+MISREAD_MS = 0.4
+STAMINA_MAX = 100.5
+STAMINA_REGEN = 0.4
+STRAIN_STEP_PCT = 1.5
+STRAIN_MISREAD_PCT = 0.2
+STRAIN_SKILL_MS = 0.5
+STRAIN_REGEN_PCT = 0.5
+LANE1 = 53
+LANE2 = 160
+LANE3 = 267
+LANE4 = 374
+LANES = [53, 160, 267, 374]
+BBOX = (746, 392, 1174, 393)
+KEY1 = "q"
+KEY2 = "w"
+KEY3 = "["
+KEY4 = "]"
+KEYS = ["q", "w", "[", "]"]
 
 p_status = True
 is_running = False
@@ -70,12 +78,20 @@ is_running = False
 # Default preset configuration
 DEFAULT_CONFIG = {
     "preset_name": "WhiteCat Skin 23 Speed (Default)",
-    "bbox": [608, 942, 1314, 943],
+    "bbox": [746, 392, 1174, 393],
     "judgement_line": 0,
     "input_delay_ms": 0,
     "delay_ms": 0,
     "skill_level": 0,
     "skill_level_ms": 0,
+    "misread_chance": 0,
+    "misread_ms": 0,
+    "stamina_max": 0,
+    "stamina_regen": 0.0,
+    "strain_step_pct": 0,
+    "strain_misread_pct": 0,
+    "strain_skill_ms": 0,
+    "strain_regen_pct": 0,
     "global_threshold": 30,
     "lanes": [
         {"name": "Lane 1", "x": 39, "key": "q", "threshold": 30},
@@ -118,6 +134,8 @@ def key_to_str(key_obj):
 def load_config():
     """Loads configuration from mania_config.json if available, and synchronizes module globals."""
     global BBOX, JUDGEMENENT_LINE, LANE1, LANE2, LANE3, LANE4, KEY1, KEY2, KEY3, KEY4, LANES, KEYS, INPUT_DELAY_MS, DELAY_MS, SKILL_LEVEL, SKILL_LEVEL_MS
+    global MISREAD_CHANCE, MISREAD_MS, STAMINA_MAX, STAMINA_REGEN
+    global STRAIN_STEP_PCT, STRAIN_MISREAD_PCT, STRAIN_SKILL_MS, STRAIN_REGEN_PCT
     config = dict(DEFAULT_CONFIG)
     if CONFIG_PATH.exists():
         try:
@@ -135,6 +153,14 @@ def load_config():
     DELAY_MS = INPUT_DELAY_MS
     SKILL_LEVEL = int(config.get("skill_level", config.get("skill_level_ms", config.get("input_variance_ms", 0))))
     SKILL_LEVEL_MS = SKILL_LEVEL
+    MISREAD_CHANCE = min(100.0, max(0.0, float(config.get("misread_chance", 0))))
+    MISREAD_MS = max(0.0, float(config.get("misread_ms", 0)))
+    STAMINA_MAX = max(0.0, float(config.get("stamina_max", 0)))
+    STAMINA_REGEN = max(0.0, float(config.get("stamina_regen", 0.0)))
+    STRAIN_STEP_PCT = max(0.0, float(config.get("strain_step_pct", 0)))
+    STRAIN_MISREAD_PCT = max(0.0, float(config.get("strain_misread_pct", 0)))
+    STRAIN_SKILL_MS = max(0.0, float(config.get("strain_skill_ms", 0)))
+    STRAIN_REGEN_PCT = max(0.0, float(config.get("strain_regen_pct", 0)))
     lanes = config.get("lanes", [])
     if lanes:
         LANES = [int(l.get("x", 0)) for l in lanes]
@@ -168,6 +194,14 @@ def save_config(config):
             "delay_ms": config.get("delay_ms", INPUT_DELAY_MS),
             "skill_level": config.get("skill_level", SKILL_LEVEL),
             "skill_level_ms": config.get("skill_level_ms", SKILL_LEVEL),
+            "misread_chance": config.get("misread_chance", MISREAD_CHANCE),
+            "misread_ms": config.get("misread_ms", MISREAD_MS),
+            "stamina_max": config.get("stamina_max", STAMINA_MAX),
+            "stamina_regen": config.get("stamina_regen", STAMINA_REGEN),
+            "strain_step_pct": config.get("strain_step_pct", STRAIN_STEP_PCT),
+            "strain_misread_pct": config.get("strain_misread_pct", STRAIN_MISREAD_PCT),
+            "strain_skill_ms": config.get("strain_skill_ms", STRAIN_SKILL_MS),
+            "strain_regen_pct": config.get("strain_regen_pct", STRAIN_REGEN_PCT),
             "global_threshold": config.get("global_threshold", 30),
             "input_mode": config.get("input_mode", "hold"),
             "lanes": config.get("lanes", [])
@@ -180,6 +214,117 @@ def save_config(config):
 
 # Initialize module globals on import
 load_config()
+
+
+class SkillSimulator:
+    """Human-like skill limits applied on top of note detection.
+
+    - Misread: each note press has a `misread_chance`% chance of being ignored; the
+      affected lane then ignores all inputs for `misread_ms` milliseconds.
+    - Stamina: a pool of `stamina_max` clicks. Every click costs 1; the pool regenerates
+      `stamina_regen` per 20 ms (continuously). Inputs are ignored while stamina < 1.
+    - Strain: every `strain_step_pct`% stamina lost, misread chance increases by `strain_misread_pct`%,
+      skill level delay increases by `strain_skill_ms` ms, and stamina gain decreases by `strain_regen_pct`%.
+      These adjustments are additive.
+    """
+    __slots__ = (
+        "num_lanes", "misread_chance", "misread_sec", "stamina_max", "base_regen_per_sec",
+        "stamina", "last_t", "blocked_until",
+        "strain_step_pct", "strain_misread_pct", "strain_skill_ms", "strain_regen_pct",
+        "base_skill_level", "curr_misread_chance", "curr_skill_level", "curr_regen_per_20ms"
+    )
+
+    def __init__(self, num_lanes, misread_chance=0, misread_ms=0, stamina_max=0, stamina_regen=0.0,
+                 strain_step_pct=0, strain_misread_pct=0, strain_skill_ms=0, strain_regen_pct=0,
+                 base_skill_level=0):
+        self.num_lanes = num_lanes
+        self.misread_chance = max(0.0, min(100.0, float(misread_chance)))
+        self.misread_sec = max(0.0, float(misread_ms)) / 1000.0
+        self.stamina_max = max(0.0, float(stamina_max))
+        self.base_regen_per_sec = max(0.0, float(stamina_regen)) * 50.0  # per 20 ms -> per second
+        self.strain_step_pct = max(0.0, float(strain_step_pct))
+        self.strain_misread_pct = max(0.0, float(strain_misread_pct))
+        self.strain_skill_ms = max(0.0, float(strain_skill_ms))
+        self.strain_regen_pct = max(0.0, float(strain_regen_pct))
+        self.base_skill_level = max(0.0, float(base_skill_level))
+
+        self.stamina = float(self.stamina_max)
+        self.last_t = time.perf_counter()
+        self.blocked_until = [0.0] * num_lanes
+
+        self.curr_misread_chance = self.misread_chance
+        self.curr_skill_level = self.base_skill_level
+        self.curr_regen_per_20ms = float(stamina_regen)
+
+    @property
+    def enabled(self):
+        return self.misread_chance > 0 or self.stamina_max > 0
+
+    def update(self, t_now):
+        """Updates stamina regeneration and calculates current strain effects."""
+        if self.stamina_max > 0:
+            dt = t_now - self.last_t
+            if dt > 0:
+                lost_pct = max(0.0, (1.0 - (self.stamina / self.stamina_max)) * 100.0)
+                steps = int(lost_pct / self.strain_step_pct) if self.strain_step_pct > 0 else 0
+                regen_factor = max(0.0, 1.0 - (steps * (self.strain_regen_pct / 100.0)))
+                eff_regen_sec = self.base_regen_per_sec * regen_factor
+                self.stamina = min(float(self.stamina_max), self.stamina + dt * eff_regen_sec)
+                self.last_t = t_now
+
+            lost_pct = max(0.0, (1.0 - (self.stamina / self.stamina_max)) * 100.0)
+            steps = int(lost_pct / self.strain_step_pct) if self.strain_step_pct > 0 else 0
+            self.curr_misread_chance = min(100.0, max(0.0, self.misread_chance + (steps * self.strain_misread_pct)))
+            self.curr_skill_level = max(0.0, self.base_skill_level + (steps * self.strain_skill_ms))
+            self.curr_regen_per_20ms = (self.base_regen_per_sec / 50.0) * max(0.0, 1.0 - (steps * (self.strain_regen_pct / 100.0)))
+        else:
+            self.curr_misread_chance = self.misread_chance
+            self.curr_skill_level = self.base_skill_level
+            self.curr_regen_per_20ms = 0.0
+
+    def allow_press(self, lane_idx, t_now):
+        """Returns True if the note press on this lane should be performed."""
+        self.update(t_now)
+
+        if self.curr_misread_chance > 0:
+            if t_now < self.blocked_until[lane_idx]:
+                return False
+            if random.random() * 100.0 < self.curr_misread_chance:
+                self.blocked_until[lane_idx] = t_now + self.misread_sec
+                return False
+
+        if self.stamina_max > 0:
+            if self.stamina < 1.0:
+                return False
+            self.stamina -= 1.0
+            # Recalculate strain after consuming click
+            lost_pct = max(0.0, (1.0 - (self.stamina / self.stamina_max)) * 100.0)
+            steps = int(lost_pct / self.strain_step_pct) if self.strain_step_pct > 0 else 0
+            self.curr_misread_chance = min(100.0, max(0.0, self.misread_chance + (steps * self.strain_misread_pct)))
+            self.curr_skill_level = max(0.0, self.base_skill_level + (steps * self.strain_skill_ms))
+            self.curr_regen_per_20ms = (self.base_regen_per_sec / 50.0) * max(0.0, 1.0 - (steps * (self.strain_regen_pct / 100.0)))
+
+        return True
+
+    def get_live_stats(self, t_now=None):
+        if t_now is None:
+            t_now = time.perf_counter()
+        self.update(t_now)
+        lost_pct = max(0.0, (1.0 - (self.stamina / self.stamina_max)) * 100.0) if self.stamina_max > 0 else 0.0
+        steps = int(lost_pct / self.strain_step_pct) if (self.stamina_max > 0 and self.strain_step_pct > 0) else 0
+        return {
+            "stamina": self.stamina,
+            "stamina_max": self.stamina_max,
+            "stamina_pct": (self.stamina / self.stamina_max * 100.0) if self.stamina_max > 0 else 100.0,
+            "stamina_lost_pct": lost_pct,
+            "strain_steps": steps,
+            "misread_chance": self.curr_misread_chance,
+            "base_misread_chance": self.misread_chance,
+            "regen_per_20ms": self.curr_regen_per_20ms,
+            "base_regen_per_20ms": self.base_regen_per_sec / 50.0,
+            "skill_level": self.curr_skill_level,
+            "base_skill_level": self.base_skill_level,
+        }
 
 
 class ManiaPlayer:
@@ -220,6 +365,24 @@ class ManiaPlayer:
             l = dict(lane)
             l["parsed_key"] = parse_key(l.get("key"))
             self.lanes.append(l)
+
+    def _make_skill_sim(self, num_lanes):
+        """Builds a SkillSimulator from config (falls back to module globals); None if all features off."""
+        cfg = self.config
+        base_sk = int(cfg.get("skill_level", cfg.get("skill_level_ms", cfg.get("input_variance_ms", SKILL_LEVEL))))
+        sim = SkillSimulator(
+            num_lanes,
+            misread_chance=cfg.get("misread_chance", MISREAD_CHANCE),
+            misread_ms=cfg.get("misread_ms", MISREAD_MS),
+            stamina_max=cfg.get("stamina_max", STAMINA_MAX),
+            stamina_regen=cfg.get("stamina_regen", STAMINA_REGEN),
+            strain_step_pct=cfg.get("strain_step_pct", STRAIN_STEP_PCT),
+            strain_misread_pct=cfg.get("strain_misread_pct", STRAIN_MISREAD_PCT),
+            strain_skill_ms=cfg.get("strain_skill_ms", STRAIN_SKILL_MS),
+            strain_regen_pct=cfg.get("strain_regen_pct", STRAIN_REGEN_PCT),
+            base_skill_level=base_sk,
+        )
+        return sim if sim.enabled else None
 
     def init_capture(self):
         backend_choice = self.config.get("capture_backend", "auto").lower()
@@ -333,6 +496,8 @@ class ManiaPlayer:
         delay_sec = max(0.0, float(self.config.get("input_delay_ms", self.config.get("delay_ms", INPUT_DELAY_MS))) / 1000.0)
         skill_level = int(self.config.get("skill_level", self.config.get("skill_level_ms", self.config.get("input_variance_ms", SKILL_LEVEL))))
         has_delay_or_skill = (delay_sec > 0 or skill_level > 0)
+        skill_sim = self._make_skill_sim(num_lanes)
+        lane_skipped = [False] * num_lanes
 
         while self.p_status and not self.return_to_menu:
             if not self.is_running:
@@ -382,9 +547,14 @@ class ManiaPlayer:
                 if hit:
                     if not pressed_states[idx]:
                         pressed_states[idx] = True
+                        if skill_sim is not None and not skill_sim.allow_press(idx, t_now):
+                            lane_skipped[idx] = True
+                            continue
+                        lane_skipped[idx] = False
                         self.pressed_state[k] = True
                         if has_delay_or_skill:
-                            var_sec = (random.uniform(-skill_level, skill_level) / 1000.0) if skill_level > 0 else 0.0
+                            eff_skill = skill_sim.curr_skill_level if skill_sim is not None else skill_level
+                            var_sec = (random.uniform(-eff_skill, eff_skill) / 1000.0) if eff_skill > 0 else 0.0
                             eff_delay = max(0.0, delay_sec + var_sec)
                             lane_hold_offsets[idx] = eff_delay
                             if eff_delay > 0:
@@ -403,6 +573,9 @@ class ManiaPlayer:
                 else:
                     if pressed_states[idx]:
                         pressed_states[idx] = False
+                        if lane_skipped[idx]:
+                            lane_skipped[idx] = False
+                            continue
                         self.pressed_state[k] = False
                         if has_delay_or_skill:
                             hold_offset = lane_hold_offsets[idx]
@@ -456,6 +629,8 @@ class ManiaPlayer:
         delay_sec = max(0.0, float(self.config.get("input_delay_ms", self.config.get("delay_ms", INPUT_DELAY_MS))) / 1000.0)
         skill_level = int(self.config.get("skill_level", self.config.get("skill_level_ms", self.config.get("input_variance_ms", SKILL_LEVEL))))
         has_delay_or_skill = (delay_sec > 0 or skill_level > 0)
+        skill_sim = self._make_skill_sim(num_lanes)
+        lane_skipped = [False] * num_lanes
 
         while self.p_status and not self.return_to_menu:
             if not self.is_running:
@@ -491,9 +666,14 @@ class ManiaPlayer:
                     if hit:
                         if not pressed_states[idx]:
                             pressed_states[idx] = True
+                            if skill_sim is not None and not skill_sim.allow_press(idx, t_now):
+                                lane_skipped[idx] = True
+                                continue
+                            lane_skipped[idx] = False
                             self.pressed_state[k] = True
                             if has_delay_or_skill:
-                                var_sec = (random.uniform(-skill_level, skill_level) / 1000.0) if skill_level > 0 else 0.0
+                                eff_skill = skill_sim.curr_skill_level if skill_sim is not None else skill_level
+                                var_sec = (random.uniform(-eff_skill, eff_skill) / 1000.0) if eff_skill > 0 else 0.0
                                 eff_delay = max(0.0, delay_sec + var_sec)
                                 lane_hold_offsets[idx] = eff_delay
                                 if eff_delay > 0:
@@ -512,6 +692,9 @@ class ManiaPlayer:
                     else:
                         if pressed_states[idx]:
                             pressed_states[idx] = False
+                            if lane_skipped[idx]:
+                                lane_skipped[idx] = False
+                                continue
                             self.pressed_state[k] = False
                             if has_delay_or_skill:
                                 hold_offset = lane_hold_offsets[idx]
@@ -550,13 +733,13 @@ class ManiaPlayer:
         if sys.platform == "win32":
             try:
                 import ctypes
-                ctypes.windll.kernel32.SetConsoleTitleW("Osu!Mania Player v1.2.3")
+                ctypes.windll.kernel32.SetConsoleTitleW("Osu!Mania Player v1.3.0")
             except Exception:
                 pass
         self.init_capture()
         self.start_listener()
         print("\n=======================================================")
-        print("  Osu!Mania Player v1.2.3 Activated!")
+        print("  Osu!Mania Player v1.3.0 Activated!")
         print("  Hotkeys:")
         print(f"    [F1 / F] Start Tracking")
         print(f"    [F2 / S] Stop / Pause")

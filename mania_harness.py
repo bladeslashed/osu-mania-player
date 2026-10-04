@@ -174,7 +174,7 @@ class ManiaHarnessApp:
         self.root = root
         self.on_save_callback = on_save_callback
 
-        self.root.title("Mania Player Calibration Harness")
+        self.root.title("Mania Player Calibration Harness v1.3.0")
         self.root.geometry("1320x840")
         self.root.minsize(1080, 690)
 
@@ -227,6 +227,24 @@ class ManiaHarnessApp:
         self.skill_level = 0
         self.var_skill_level = tk.IntVar(value=0)
 
+        # Skill simulation extras: Misread, Stamina, and Strain
+        self.misread_chance = 0.0
+        self.misread_ms = 0.0
+        self.stamina_max = 0.0
+        self.stamina_regen = 0.0
+        self.strain_step_pct = 0.0
+        self.strain_misread_pct = 0.0
+        self.strain_skill_ms = 0.0
+        self.strain_regen_pct = 0.0
+        self.var_misread_chance = tk.StringVar(value="0")
+        self.var_misread_ms = tk.StringVar(value="0")
+        self.var_stamina_max = tk.StringVar(value="0")
+        self.var_stamina_regen = tk.StringVar(value="0.0")
+        self.var_strain_step_pct = tk.StringVar(value="0")
+        self.var_strain_misread_pct = tk.StringVar(value="0")
+        self.var_strain_skill_ms = tk.StringVar(value="0")
+        self.var_strain_regen_pct = tk.StringVar(value="0")
+
         # Lane target positions (relative to bbox_left) and keybinds (1 to 20 keys)
         self.key_count = 4
         self.lane_rel_x = [39, 215, 353, 502]
@@ -278,7 +296,57 @@ class ManiaHarnessApp:
         self.style.configure(".", background=self.bg_panel, foreground=self.fg_main)
         self.style.configure("TLabel", background=self.bg_panel, foreground=self.fg_main)
         self.style.configure("TFrame", background=self.bg_panel)
-        self.style.configure("TCombobox", fieldbackground=self.bg_input, background=self.bg_panel, foreground=self.fg_main)
+        self.style.configure(
+            "TCombobox",
+            fieldbackground="#1e293b",
+            background=self.bg_panel,
+            foreground="#ffffff",
+            selectbackground="#0284c7",
+            selectforeground="#ffffff",
+            arrowcolor="#38bdf8",
+            font=("Segoe UI", 9, "bold")
+        )
+        self.style.map(
+            "TCombobox",
+            fieldbackground=[
+                ("readonly", "#1e293b"),
+                ("active", "#334155"),
+                ("focus", "#1e293b"),
+                ("disabled", "#18181b")
+            ],
+            foreground=[
+                ("readonly", "#ffffff"),
+                ("active", "#ffffff"),
+                ("focus", "#ffffff"),
+                ("disabled", "#71717a")
+            ],
+            selectbackground=[
+                ("readonly", "#0284c7"),
+                ("active", "#0284c7"),
+                ("focus", "#0284c7")
+            ],
+            selectforeground=[
+                ("readonly", "#ffffff"),
+                ("active", "#ffffff"),
+                ("focus", "#ffffff")
+            ],
+            background=[
+                ("readonly", "#27272a"),
+                ("active", "#3f3f46")
+            ],
+            arrowcolor=[
+                ("readonly", "#38bdf8"),
+                ("active", "#ffffff")
+            ]
+        )
+
+        # Dropdown popdown listbox styling for crisp readability
+        self.root.option_add("*TCombobox*Listbox.background", "#1e293b")
+        self.root.option_add("*TCombobox*Listbox.foreground", "#ffffff")
+        self.root.option_add("*TCombobox*Listbox.selectBackground", "#0284c7")
+        self.root.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
+        self.root.option_add("*TCombobox*Listbox.font", ("Segoe UI", 9, "bold"))
+
         self.style.configure("Header.TLabel", font=("Segoe UI", 11, "bold"), foreground=self.accent)
         self.style.configure("Sub.TLabel", font=("Segoe UI", 9), foreground=self.fg_dim)
 
@@ -578,10 +646,6 @@ class ManiaHarnessApp:
             )
             btn_d.pack(side=tk.LEFT, padx=1)
 
-        btn_m1 = tk.Button(row_d1, text="-1", bg="#3f3f46", fg=self.fg_dim, font=("Segoe UI", 7), relief="flat", padx=2, pady=1, command=lambda: self.adjust_input_delay(-1))
-        btn_m1.pack(side=tk.RIGHT, padx=1)
-        btn_p1 = tk.Button(row_d1, text="+1", bg="#3f3f46", fg=self.fg_dim, font=("Segoe UI", 7), relief="flat", padx=2, pady=1, command=lambda: self.adjust_input_delay(1))
-        btn_p1.pack(side=tk.RIGHT, padx=1)
 
         lbl_delay_desc = tk.Label(
             delay_frame, text="Input Delay: Delays key presses & releases by X ms for timing offset.",
@@ -612,16 +676,93 @@ class ManiaHarnessApp:
             )
             btn_s.pack(side=tk.LEFT, padx=1)
 
-        btn_sm1 = tk.Button(row_s1, text="-1", bg="#3f3f46", fg=self.fg_dim, font=("Segoe UI", 7), relief="flat", padx=2, pady=1, command=lambda: self.adjust_skill_level(-1))
-        btn_sm1.pack(side=tk.RIGHT, padx=1)
-        btn_sp1 = tk.Button(row_s1, text="+1", bg="#3f3f46", fg=self.fg_dim, font=("Segoe UI", 7), relief="flat", padx=2, pady=1, command=lambda: self.adjust_skill_level(1))
-        btn_sp1.pack(side=tk.RIGHT, padx=1)
 
         lbl_skill_desc = tk.Label(
             delay_frame, text="Skill Level: Adds random input variance from -X to +X ms (humanization).",
             bg=self.bg_panel, fg=self.fg_dim, font=("Segoe UI", 7), justify="left", anchor="w"
         )
         lbl_skill_desc.pack(fill=tk.X, pady=(1, 0))
+
+        # 2b. Skill Simulation Frame (Misread, Stamina, Strain)
+        sim_frame = tk.LabelFrame(sidebar, text="Skill Simulation (Misread, Stamina, Strain)", bg=self.bg_panel, fg=self.accent, font=("Segoe UI", 9, "bold"), padx=8, pady=6)
+        sim_frame.pack(fill=tk.X, pady=(0, 6))
+
+        def _make_spin(parent, var, lo, hi, width, color, increment=1.0):
+            kwargs = dict(
+                from_=lo, to=hi, increment=increment, textvariable=var, width=width,
+                bg=self.bg_input, fg=color, font=("Consolas", 9, "bold"), justify="center", relief="flat",
+                command=self._on_extras_changed
+            )
+            sp = tk.Spinbox(parent, **kwargs)
+            sp.bind("<KeyRelease>", lambda e: self._on_extras_changed())
+            return sp
+
+        def _lbl(parent, text, bold=False, dim=True, padx=(2, 4)):
+            tk.Label(
+                parent, text=text, bg=self.bg_panel, fg=self.fg_dim if dim else self.fg_main,
+                font=("Segoe UI", 8, "bold") if bold else ("Segoe UI", 8)
+            ).pack(side=tk.LEFT, padx=padx)
+
+        row_m = tk.Frame(sim_frame, bg=self.bg_panel)
+        row_m.pack(fill=tk.X, pady=(0, 2))
+        _lbl(row_m, "Misread:", bold=True, dim=False, padx=(0, 4))
+        self.spin_misread_chance = _make_spin(row_m, self.var_misread_chance, 0.0, 100.0, 5, "#fb7185", increment=0.5)
+        self.spin_misread_chance.pack(side=tk.LEFT, padx=2)
+        _lbl(row_m, "% chance, ignore lane for")
+        self.spin_misread_ms = _make_spin(row_m, self.var_misread_ms, 0.0, 5000.0, 5, "#fb7185", increment=10.0)
+        self.spin_misread_ms.pack(side=tk.LEFT, padx=2)
+        _lbl(row_m, "ms")
+
+        tk.Label(
+            sim_frame, text="Misread: X% chance per note that the lane ignores input for Y ms.",
+            bg=self.bg_panel, fg=self.fg_dim, font=("Segoe UI", 7), justify="left", anchor="w"
+        ).pack(fill=tk.X, pady=(0, 3))
+
+        row_st = tk.Frame(sim_frame, bg=self.bg_panel)
+        row_st.pack(fill=tk.X, pady=(0, 2))
+        _lbl(row_st, "Stamina:", bold=True, dim=False, padx=(0, 4))
+        self.spin_stamina_max = _make_spin(row_st, self.var_stamina_max, 0.0, 9999.0, 5, "#34d399", increment=1.0)
+        self.spin_stamina_max.pack(side=tk.LEFT, padx=2)
+        _lbl(row_st, "max clicks, +")
+        self.spin_stamina_regen = _make_spin(row_st, self.var_stamina_regen, 0.0, 999.0, 5, "#34d399", increment=0.1)
+        self.spin_stamina_regen.pack(side=tk.LEFT, padx=2)
+        _lbl(row_st, "per 20ms")
+
+        tk.Label(
+            sim_frame, text="Stamina: each click costs 1; ignores inputs while empty (0 max = off).",
+            bg=self.bg_panel, fg=self.fg_dim, font=("Segoe UI", 7), justify="left", anchor="w"
+        ).pack(fill=tk.X, pady=(0, 3))
+
+        # Strain row
+        row_str1 = tk.Frame(sim_frame, bg=self.bg_panel)
+        row_str1.pack(fill=tk.X, pady=(0, 2))
+        _lbl(row_str1, "Strain:", bold=True, dim=False, padx=(0, 4))
+        _lbl(row_str1, "Every")
+        self.spin_strain_step = _make_spin(row_str1, self.var_strain_step_pct, 0.0, 100.0, 4, "#f59e0b", increment=0.5)
+        self.spin_strain_step.pack(side=tk.LEFT, padx=2)
+        _lbl(row_str1, "% stamina lost:")
+
+        row_str2 = tk.Frame(sim_frame, bg=self.bg_panel)
+        row_str2.pack(fill=tk.X, pady=(0, 2))
+        _lbl(row_str2, "+Misread:")
+        self.spin_strain_misread = _make_spin(row_str2, self.var_strain_misread_pct, 0.0, 100.0, 4, "#fb7185", increment=0.5)
+        self.spin_strain_misread.pack(side=tk.LEFT, padx=1)
+        _lbl(row_str2, "%")
+
+        _lbl(row_str2, "+Delay:")
+        self.spin_strain_skill = _make_spin(row_str2, self.var_strain_skill_ms, 0.0, 500.0, 4, "#a78bfa", increment=0.5)
+        self.spin_strain_skill.pack(side=tk.LEFT, padx=1)
+        _lbl(row_str2, "ms")
+
+        _lbl(row_str2, "-Regen:")
+        self.spin_strain_regen = _make_spin(row_str2, self.var_strain_regen_pct, 0.0, 100.0, 4, "#ef4444", increment=0.5)
+        self.spin_strain_regen.pack(side=tk.LEFT, padx=1)
+        _lbl(row_str2, "%")
+
+        tk.Label(
+            sim_frame, text="Strain: Every X% stamina lost, adds +y% misread, +z ms jitter, -Z% regen.",
+            bg=self.bg_panel, fg=self.fg_dim, font=("Segoe UI", 7), justify="left", anchor="w"
+        ).pack(fill=tk.X, pady=(0, 0))
 
         # 3. Lanes & Keybinds Inspector Frame (Dynamic 1 to 20 Keys)
         lane_frame = tk.LabelFrame(sidebar, text="Lanes & Keybinds", bg=self.bg_panel, fg=self.accent, font=("Segoe UI", 9, "bold"), padx=8, pady=6)
@@ -1038,6 +1179,12 @@ class ManiaHarnessApp:
             self.set_input_delay(delay_val)
             skill_val = int(data.get("skill_level", data.get("skill_level_ms", data.get("input_variance_ms", 0))))
             self.set_skill_level(skill_val)
+            self.set_skill_extras(
+                data.get("misread_chance", 0), data.get("misread_ms", 0),
+                data.get("stamina_max", 0), data.get("stamina_regen", 0.0),
+                data.get("strain_step_pct", 0), data.get("strain_misread_pct", 0),
+                data.get("strain_skill_ms", 0), data.get("strain_regen_pct", 0)
+            )
 
             self._sync_bbox_to_inputs()
             self.var_jl.set(self.judgement_line)
@@ -1090,6 +1237,7 @@ class ManiaHarnessApp:
             "delay_ms": self.input_delay_ms,
             "skill_level": self.skill_level,
             "skill_level_ms": self.skill_level,
+            **self._extras_dict(),
             "global_threshold": 30,
             "lanes": [
                 {
@@ -1757,6 +1905,7 @@ class ManiaHarnessApp:
             self.var_delay_ms.set(self.input_delay_ms)
         if hasattr(self, "var_skill_level"):
             self.var_skill_level.set(self.skill_level)
+        self._sync_extras_to_vars()
         w = max(1, self.bbox_right - self.bbox_left)
         h = max(1, self.bbox_bottom - self.bbox_top)
         self.lbl_bbox_dims.config(text=f"Width: {w} px | Height: {h} px")
@@ -1780,14 +1929,6 @@ class ManiaHarnessApp:
         if hasattr(self, "lbl_status"):
             self.lbl_status.config(text=f"Input delay set to {ms} ms")
 
-    def adjust_input_delay(self, delta: int):
-        curr = 0
-        try:
-            curr = self.var_delay_ms.get() or 0
-        except Exception:
-            curr = self.input_delay_ms
-        self.set_input_delay(max(0, curr + delta))
-
     def _on_skill_level_changed(self):
         try:
             val = max(0, int(self.var_skill_level.get()))
@@ -1805,13 +1946,123 @@ class ManiaHarnessApp:
         if hasattr(self, "lbl_status"):
             self.lbl_status.config(text=f"Skill Level set to ±{ms} ms variance")
 
-    def adjust_skill_level(self, delta: int):
-        curr = 0
+    # -------------------------------------------------------------
+    # Skill Simulation: Misread, Stamina & Strain (with Float/Decimal Support)
+    # -------------------------------------------------------------
+    @staticmethod
+    def _format_num(val, precision=2) -> str:
+        """Formats numbers so integers show cleanly as '10' and decimals show as '2.5' or '12.25'."""
         try:
-            curr = self.var_skill_level.get() or 0
-        except Exception:
-            curr = self.skill_level
-        self.set_skill_level(max(0, curr + delta))
+            f = float(val)
+            if f.is_integer():
+                return str(int(f))
+            formatted = f"{f:.{precision}f}".rstrip("0").rstrip(".")
+            return formatted if formatted else "0"
+        except (ValueError, TypeError):
+            return "0"
+
+    @staticmethod
+    def _parse_float_field(var, lo=0.0, hi=None, default=None):
+        try:
+            val_str = str(var.get()).strip()
+            if not val_str or val_str == ".":
+                return default
+            val = float(val_str)
+            if lo is not None and val < lo:
+                val = lo
+            if hi is not None and val > hi:
+                val = hi
+            return val
+        except (ValueError, TypeError, tk.TclError):
+            return default
+
+    def _extras_dict(self) -> dict:
+        def _clean(val):
+            try:
+                f = float(val)
+                return int(f) if f.is_integer() else round(f, 4)
+            except Exception:
+                return 0
+
+        return {
+            "misread_chance": _clean(self.misread_chance),
+            "misread_ms": _clean(self.misread_ms),
+            "stamina_max": _clean(self.stamina_max),
+            "stamina_regen": _clean(self.stamina_regen),
+            "strain_step_pct": _clean(self.strain_step_pct),
+            "strain_misread_pct": _clean(self.strain_misread_pct),
+            "strain_skill_ms": _clean(self.strain_skill_ms),
+            "strain_regen_pct": _clean(self.strain_regen_pct),
+        }
+
+    def _sync_extras_to_vars(self):
+        if not hasattr(self, "var_misread_chance"):
+            return
+        self.var_misread_chance.set(self._format_num(self.misread_chance))
+        self.var_misread_ms.set(self._format_num(self.misread_ms))
+        self.var_stamina_max.set(self._format_num(self.stamina_max))
+        self.var_stamina_regen.set(self._format_num(self.stamina_regen, precision=3))
+        if hasattr(self, "var_strain_step_pct"):
+            self.var_strain_step_pct.set(self._format_num(self.strain_step_pct))
+            self.var_strain_misread_pct.set(self._format_num(self.strain_misread_pct))
+            self.var_strain_skill_ms.set(self._format_num(self.strain_skill_ms))
+            self.var_strain_regen_pct.set(self._format_num(self.strain_regen_pct))
+
+    def set_skill_extras(self, misread_chance=None, misread_ms=None, stamina_max=None, stamina_regen=None,
+                         strain_step_pct=None, strain_misread_pct=None, strain_skill_ms=None, strain_regen_pct=None):
+        try:
+            if misread_chance is not None:
+                self.misread_chance = min(100.0, max(0.0, float(misread_chance)))
+            if misread_ms is not None:
+                self.misread_ms = max(0.0, float(misread_ms))
+            if stamina_max is not None:
+                self.stamina_max = max(0.0, float(stamina_max))
+            if stamina_regen is not None:
+                self.stamina_regen = max(0.0, float(stamina_regen))
+            if strain_step_pct is not None:
+                self.strain_step_pct = min(100.0, max(0.0, float(strain_step_pct)))
+            if strain_misread_pct is not None:
+                self.strain_misread_pct = min(100.0, max(0.0, float(strain_misread_pct)))
+            if strain_skill_ms is not None:
+                self.strain_skill_ms = max(0.0, float(strain_skill_ms))
+            if strain_regen_pct is not None:
+                self.strain_regen_pct = min(100.0, max(0.0, float(strain_regen_pct)))
+        except (TypeError, ValueError):
+            return
+        self._sync_extras_to_vars()
+
+    def _on_extras_changed(self):
+        """Reads the Misread/Stamina/Strain spinboxes, ignoring half-typed values."""
+        v = self._parse_float_field(self.var_misread_chance, lo=0.0, hi=100.0)
+        if v is not None:
+            self.misread_chance = v
+        v = self._parse_float_field(self.var_misread_ms, lo=0.0, hi=60000.0)
+        if v is not None:
+            self.misread_ms = v
+        v = self._parse_float_field(self.var_stamina_max, lo=0.0, hi=99999.0)
+        if v is not None:
+            self.stamina_max = v
+        v = self._parse_float_field(self.var_stamina_regen, lo=0.0, hi=99999.0)
+        if v is not None:
+            self.stamina_regen = v
+        v = self._parse_float_field(self.var_strain_step_pct, lo=0.0, hi=100.0)
+        if v is not None:
+            self.strain_step_pct = v
+        v = self._parse_float_field(self.var_strain_misread_pct, lo=0.0, hi=100.0)
+        if v is not None:
+            self.strain_misread_pct = v
+        v = self._parse_float_field(self.var_strain_skill_ms, lo=0.0, hi=5000.0)
+        if v is not None:
+            self.strain_skill_ms = v
+        v = self._parse_float_field(self.var_strain_regen_pct, lo=0.0, hi=100.0)
+        if v is not None:
+            self.strain_regen_pct = v
+
+        if hasattr(self, "lbl_status"):
+            mis = f"Misread {self._format_num(self.misread_chance)}% / {self._format_num(self.misread_ms)}ms" if self.misread_chance > 0 else "Misread off"
+            sta = f"Stamina {self._format_num(self.stamina_max)} (+{self._format_num(self.stamina_regen, 3)}/20ms)" if self.stamina_max > 0 else "Stamina off"
+            strn = f"Strain {self._format_num(self.strain_step_pct)}% (+{self._format_num(self.strain_misread_pct)}%, +{self._format_num(self.strain_skill_ms)}ms, -{self._format_num(self.strain_regen_pct)}%)" if self.strain_step_pct > 0 else "Strain off"
+            self.lbl_status.config(text=f"{mis} | {sta} | {strn}")
 
     # -------------------------------------------------------------
     # Live Updates to Mania Player
@@ -1836,6 +2087,14 @@ class ManiaHarnessApp:
                     mod.DELAY_MS = self.input_delay_ms
                     mod.SKILL_LEVEL = self.skill_level
                     mod.SKILL_LEVEL_MS = self.skill_level
+                    mod.MISREAD_CHANCE = self.misread_chance
+                    mod.MISREAD_MS = self.misread_ms
+                    mod.STAMINA_MAX = self.stamina_max
+                    mod.STAMINA_REGEN = self.stamina_regen
+                    mod.STRAIN_STEP_PCT = self.strain_step_pct
+                    mod.STRAIN_MISREAD_PCT = self.strain_misread_pct
+                    mod.STRAIN_SKILL_MS = self.strain_skill_ms
+                    mod.STRAIN_REGEN_PCT = self.strain_regen_pct
                     for i in range(min(4, len(lanes))):
                         setattr(mod, f"LANE{i+1}", lanes[i])
                         setattr(mod, f"KEY{i+1}", keys[i])
@@ -1845,7 +2104,7 @@ class ManiaHarnessApp:
         # 2. Invoke callback to GUI
         if self.on_save_callback:
             try:
-                self.on_save_callback(bbox=bbox, judgement_line=jl, lanes=lanes, keys=keys, delay_ms=self.input_delay_ms, skill_level=self.skill_level)
+                self.on_save_callback(bbox=bbox, judgement_line=jl, lanes=lanes, keys=keys, delay_ms=self.input_delay_ms, skill_level=self.skill_level, skill_extras=self._extras_dict())
             except Exception as e:
                 print(f"[Callback Warning] {e}")
 
@@ -1887,6 +2146,27 @@ class ManiaHarnessApp:
                 m_skill = re.search(r"^(?:SKILL_LEVEL|SKILL_LEVEL_MS|INPUT_VARIANCE_MS)\s*=\s*(\d+)", content, re.MULTILINE)
                 if m_skill:
                     self.set_skill_level(int(m_skill.group(1)))
+
+                # Parse Misread & Stamina & Strain constants
+                m_mc = re.search(r"^MISREAD_CHANCE\s*=\s*(\d+(?:\.\d+)?)", content, re.MULTILINE)
+                m_mm = re.search(r"^MISREAD_MS\s*=\s*(\d+(?:\.\d+)?)", content, re.MULTILINE)
+                m_sm = re.search(r"^STAMINA_MAX\s*=\s*(\d+(?:\.\d+)?)", content, re.MULTILINE)
+                m_sr = re.search(r"^STAMINA_REGEN\s*=\s*(\d+(?:\.\d+)?)", content, re.MULTILINE)
+                m_ss = re.search(r"^STRAIN_STEP_PCT\s*=\s*(\d+(?:\.\d+)?)", content, re.MULTILINE)
+                m_smis = re.search(r"^STRAIN_MISREAD_PCT\s*=\s*(\d+(?:\.\d+)?)", content, re.MULTILINE)
+                m_sskill = re.search(r"^STRAIN_SKILL_MS\s*=\s*(\d+(?:\.\d+)?)", content, re.MULTILINE)
+                m_sreg = re.search(r"^STRAIN_REGEN_PCT\s*=\s*(\d+(?:\.\d+)?)", content, re.MULTILINE)
+                if m_mc or m_mm or m_sm or m_sr or m_ss or m_smis or m_sskill or m_sreg:
+                    self.set_skill_extras(
+                        misread_chance=m_mc.group(1) if m_mc else self.misread_chance,
+                        misread_ms=m_mm.group(1) if m_mm else self.misread_ms,
+                        stamina_max=m_sm.group(1) if m_sm else self.stamina_max,
+                        stamina_regen=m_sr.group(1) if m_sr else self.stamina_regen,
+                        strain_step_pct=m_ss.group(1) if m_ss else self.strain_step_pct,
+                        strain_misread_pct=m_smis.group(1) if m_smis else self.strain_misread_pct,
+                        strain_skill_ms=m_sskill.group(1) if m_sskill else self.strain_skill_ms,
+                        strain_regen_pct=m_sreg.group(1) if m_sreg else self.strain_regen_pct,
+                    )
 
                 # Parse dynamic LANES = [...]
                 m_lanes = re.search(r"^LANES\s*=\s*\[([\d\s,]+)\]", content, re.MULTILINE)
@@ -1964,6 +2244,18 @@ class ManiaHarnessApp:
                 if "skill_level" in cfg or "skill_level_ms" in cfg or "input_variance_ms" in cfg:
                     cfg_skill = int(cfg.get("skill_level", cfg.get("skill_level_ms", cfg.get("input_variance_ms", 0))))
                     self.set_skill_level(cfg_skill)
+
+                if any(k in cfg for k in ("misread_chance", "misread_ms", "stamina_max", "stamina_regen", "strain_step_pct", "strain_misread_pct", "strain_skill_ms", "strain_regen_pct")):
+                    self.set_skill_extras(
+                        misread_chance=cfg.get("misread_chance", self.misread_chance),
+                        misread_ms=cfg.get("misread_ms", self.misread_ms),
+                        stamina_max=cfg.get("stamina_max", self.stamina_max),
+                        stamina_regen=cfg.get("stamina_regen", self.stamina_regen),
+                        strain_step_pct=cfg.get("strain_step_pct", self.strain_step_pct),
+                        strain_misread_pct=cfg.get("strain_misread_pct", self.strain_misread_pct),
+                        strain_skill_ms=cfg.get("strain_skill_ms", self.strain_skill_ms),
+                        strain_regen_pct=cfg.get("strain_regen_pct", self.strain_regen_pct),
+                    )
             except Exception:
                 pass
 
@@ -2001,6 +2293,9 @@ class ManiaHarnessApp:
             f"JUDGEMENENT_LINE = {self.judgement_line}\n"
             f"INPUT_DELAY_MS = {self.input_delay_ms} ms\n"
             f"SKILL_LEVEL = {self.skill_level} ms (±{self.skill_level} ms variance)\n"
+            f"MISREAD = {self._format_num(self.misread_chance)}% chance, ignore lane {self._format_num(self.misread_ms)} ms\n"
+            f"STAMINA = {self._format_num(self.stamina_max)} max clicks, +{self._format_num(self.stamina_regen, precision=3)} per 20 ms\n"
+            f"STRAIN = Every {self._format_num(self.strain_step_pct)}% lost: +{self._format_num(self.strain_misread_pct)}% misread, +{self._format_num(self.strain_skill_ms)}ms jitter, -{self._format_num(self.strain_regen_pct)}% regen\n"
             f"LANES ({self.key_count}K) = {self.lane_rel_x[:self.key_count]}\n"
             f"KEYS = {self.lane_keys[:self.key_count]}\n\n"
             f"A backup will be created in '{self.backups_dir.name}/'. Proceed?"
@@ -2052,6 +2347,25 @@ class ManiaHarnessApp:
                 )
             else:
                 content = f"SKILL_LEVEL = {self.skill_level}\n" + content
+
+            for const_name, const_val in (
+                ("MISREAD_CHANCE", self._format_num(self.misread_chance)),
+                ("MISREAD_MS", self._format_num(self.misread_ms)),
+                ("STAMINA_MAX", self._format_num(self.stamina_max)),
+                ("STAMINA_REGEN", self._format_num(self.stamina_regen, precision=3)),
+                ("STRAIN_STEP_PCT", self._format_num(self.strain_step_pct)),
+                ("STRAIN_MISREAD_PCT", self._format_num(self.strain_misread_pct)),
+                ("STRAIN_SKILL_MS", self._format_num(self.strain_skill_ms)),
+                ("STRAIN_REGEN_PCT", self._format_num(self.strain_regen_pct)),
+            ):
+                if re.search(rf"^{const_name}\s*=", content, re.MULTILINE):
+                    content = re.sub(
+                        rf"^({const_name}\s*=\s*).*$",
+                        rf"\g<1>{const_val}",
+                        content, flags=re.MULTILINE
+                    )
+                else:
+                    content = f"{const_name} = {const_val}\n" + content
 
             # Update or insert dynamic LANES and KEYS lists
             lanes_repr = str(self.lane_rel_x[:self.key_count])
@@ -2115,6 +2429,7 @@ class ManiaHarnessApp:
                     cfg["delay_ms"] = self.input_delay_ms
                     cfg["skill_level"] = self.skill_level
                     cfg["skill_level_ms"] = self.skill_level
+                    cfg.update(self._extras_dict())
                     cfg["key_count"] = self.key_count
                     cfg["lanes"] = [
                         {
@@ -2140,6 +2455,7 @@ class ManiaHarnessApp:
                     s_data["delay_ms"] = self.input_delay_ms
                     s_data["skill_level"] = self.skill_level
                     s_data["skill_level_ms"] = self.skill_level
+                    s_data.update(self._extras_dict())
                     s_data["lanes"] = [
                         {
                             "name": f"Lane {i+1}",
@@ -2171,6 +2487,14 @@ class ManiaHarnessApp:
             f"JUDGEMENENT_LINE = {self.judgement_line}\n"
             f"INPUT_DELAY_MS = {self.input_delay_ms}\n"
             f"SKILL_LEVEL = {self.skill_level}\n"
+            f"MISREAD_CHANCE = {self._format_num(self.misread_chance)}\n"
+            f"MISREAD_MS = {self._format_num(self.misread_ms)}\n"
+            f"STAMINA_MAX = {self._format_num(self.stamina_max)}\n"
+            f"STAMINA_REGEN = {self._format_num(self.stamina_regen, precision=3)}\n"
+            f"STRAIN_STEP_PCT = {self._format_num(self.strain_step_pct)}\n"
+            f"STRAIN_MISREAD_PCT = {self._format_num(self.strain_misread_pct)}\n"
+            f"STRAIN_SKILL_MS = {self._format_num(self.strain_skill_ms)}\n"
+            f"STRAIN_REGEN_PCT = {self._format_num(self.strain_regen_pct)}\n"
             f"LANES = {self.lane_rel_x[:self.key_count]}\n"
             f"KEYS = {self.lane_keys[:self.key_count]}\n"
             f"BBOX = ({self.bbox_left}, {self.bbox_top}, {self.bbox_right}, {self.bbox_bottom})\n"

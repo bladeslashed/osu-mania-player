@@ -1,5 +1,5 @@
 @echo off
-title Osu!Mania Player v1.2.3
+title Osu!Mania Player v1.3.0
 python mania_gui.py
 if %ERRORLEVEL% NEQ 0 (
     echo.

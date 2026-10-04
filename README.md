@@ -1,4 +1,4 @@
-# ManiaPlayer V1.2
+# ManiaPlayer V1.3.0
 
 ### CODED WITH ANTIGRAVITY, USER SUPPLIED BASE SCRIPT
 A high-performance, ultra-low-latency computer vision automation bot and visual calibration harness for **osu!mania** (supporting 1K through 20K modes).
@@ -15,9 +15,16 @@ Designed with a dual-engine architecture: a modular **Python / MSS engine** for 
 - **Modern Dark GUI Dashboard (`mania_gui.py`)**:
   - Live animated visualizer for all lanes with real-time note-hit indicators.
   - Performance monitoring and dynamic FPS counter (60 - 240+ FPS).
+  - **⚡ Live Skill & Stamina Monitor**: Real-time numerical stamina readout, animated progress bar with dynamic color grading (Green > 50%, Amber 20-50%, Red < 20%), live stamina regeneration rate, misread chance, and active strain debuff telemetry.
   - One-click launcher for the interactive visual calibrator (`🎯 Open Calibrator`).
   - Skin preset selector and instant start/stop controls.
   - Packaged as a standalone Windows executable (`maniaplayer.exe`).
+- **Human-like Skill Simulation & Fatigue (Misread, Stamina, Strain)**:
+  - **Skill Level Jitter**: Adds configurable uniform input variance from $\pm X\text{ ms}$ to mimic natural human finger inaccuracy.
+  - **Misread System**: Configurable chance ($X\%$) for a lane to miss-read notes, ignoring inputs on that lane for $Y\text{ ms}$.
+  - **Stamina Pool**: Configurable maximum clicks with continuous regeneration per 20ms. Inputs are ignored when empty.
+  - **Strain Dynamic Fatigue**: For every $X\%$ stamina lost, misread chance increases by $y\%$, skill jitter delay increases by $z\text{ ms}$, and stamina regeneration decreases by $Z\%$.
+  - **Decimal Precision**: Full support for decimal/float values across all stats (e.g. `2.5%` misread, `12.5%` strain steps, `1.25` regen/20ms) with clean rounded UI readouts.
 - **Interactive Visual Calibration Harness (`mania_harness.py`)**:
   - **BBOX Drag & Resize**: Visually position the playfield capture box with 1px snap helpers and fine Y-offset shifting.
   - **Dynamic Multi-Key Support (1 to 20 Keys)**: Seamlessly switch between 4K, 7K, 8K, 10K, or custom key layouts with built-in presets (`QW[]`, `DFJK`, `ASKL`, `ZX./`, etc.).
@@ -25,8 +32,7 @@ Designed with a dual-engine architecture: a modular **Python / MSS engine** for 
   - **Pixel Magnifier & Loupe**: Hover anywhere on the screenshot to inspect coordinates, exact RGB values, and brightness levels in real time.
   - **Live Judgement Detection Preview**: Visual strip showing simulated note detection (`sum(RGB)/3 > threshold`) at the judgement line before entering a match.
   - **Input Delay Calibration (`input_delay_ms`)**: Fine-tune input delay in milliseconds (delays both hold and release) to sync with judgement windows (e.g. 300g precision) and hardware polling latencies.
-  - **Optimized 5K+ Execution Engine**: High-performance note processing for 5K, 7K, and multi-key charts with pre-parsed keys (handling `"space"` cleanly), zero per-frame memory allocations, state-cached UI visualizer, and Windows 1ms precision timer (`timeBeginPeriod`).
-  - **Non-Intrusive Disappearing Capture**: Captures screenshots instantly or with a countdown delay, automatically hiding the calibrator window during capture so osu!mania is never occluded.
+  - **High-Contrast Preset Selector**: Custom styled dropdown selector with bright white text ensuring complete visibility against dark panel backgrounds.
   - **Dedicated Backups Manager**: Every calibration save automatically archives a timestamped copy of `maniaplayer.py` into a dedicated `backups/` directory, preventing accidental loss of working configurations.
   - **Live Synchronization**: Saving or applying settings in the calibrator immediately propagates updates to both the running player engine and disk configurations (`mania_config.json`, `settings.json`).
   - **Always on Top**: Harness can float above osu!mania in fullscreen windowed / borderless modes.
@@ -189,6 +195,42 @@ graph TD
 
 ---
 
+## 🧠 Skill Simulation System (Humanization & Fatigue)
+
+To produce human-like, non-robotic gameplay, ManiaPlayer features a customizable physical simulation engine operating across both Python and Native C engines:
+
+### 1. Skill Level Jitter (`skill_level`)
+- Adds random uniform input variance between $[-\text{skill\_level}, +\text{skill\_level}]$ ms to every note press.
+- Example: With `skill_level = 5`, note presses naturally deviate between $-5\text{ ms}$ and $+5\text{ ms}$, simulating natural human finger inaccuracy.
+
+### 2. Misread System (`misread_chance` & `misread_ms`)
+- **Chance ($X\%$)**: Probability that a note press on a lane is misread.
+- **Duration ($Y\text{ ms}$)**: Once a misread occurs, that specific lane ignores all incoming inputs for $Y$ milliseconds, simulating player sightread stutter or hesitation.
+
+### 3. Stamina Pool (`stamina_max` & `stamina_regen`)
+- **Stamina Pool**: A click budget representing hand endurance (e.g. `50.0` max clicks).
+- **Consumption & Regeneration**: Every note click deducts 1 click from the pool. Stamina regenerates continuously by `stamina_regen` every 20ms (e.g. `+1.0` clicks / 20ms = 50 clicks/sec).
+- **Depletion**: When stamina reaches 0, notes are ignored until stamina recovers above 1 click.
+
+### 4. Dynamic Strain (Cumulative Fatigue Debuffs)
+As stamina depletes during dense streams and chordjacks, player fatigue intensifies:
+- **Calculation**:
+  $$\text{lost\_pct} = \max\left(0, \left(1.0 - \frac{\text{stamina}}{\text{stamina\_max}}\right) \times 100\right)$$
+  $$\text{steps} = \left\lfloor \frac{\text{lost\_pct}}{\text{strain\_step\_pct}} \right\rfloor \quad (\text{when } \text{strain\_step\_pct} > 0)$$
+- **Additive Penalties**:
+  - **Misread Chance**: $\text{eff\_misread} = \min\left(100\%, \text{base} + (\text{steps} \times \text{strain\_misread\_pct})\right)$
+  - **Skill Jitter**: $\text{eff\_jitter} = \text{base} + (\text{steps} \times \text{strain\_skill\_ms})\text{ ms}$
+  - **Stamina Regen**: $\text{eff\_regen} = \text{base} \times \max\left(0.0, 1.0 - \frac{\text{steps} \times \text{strain\_regen\_pct}}{100}\right)$
+
+### 5. Live Skill & Stamina Monitor in GUI
+- **Live Stamina Gauge**: Numerical click readout and animated progress bar with dynamic color transitions (Green $> 50\%$, Amber $20\text{--}50\%$, Red $< 20\%$).
+- **Live Regen Badge**: Real-time effective regeneration rate and active strain penalty percentage.
+- **Live Misread Badge**: Current effective misread chance and active strain bonus.
+- **Live Strain Status**: Real-time fatigue tier (`🔥 Tier 1 Active`, `Tier 2`, etc.) and distance to the next tier.
+- **Decimal Precision**: All numbers support floating-point values (e.g. `12.5%`, `2.5%`, `1.25`) with clean rounding in the GUI.
+
+---
+
 ## 🚀 Getting Started
 
 ### 1. Requirements
@@ -237,7 +279,7 @@ To recompile `maniaplayer.c` into `maniaplayer_native.exe`:
 ```
 Or execute GCC directly:
 ```powershell
-gcc -O3 -s -march=native -Wall -o maniaplayer_native.exe maniaplayer.c -lgdi32 -luser32
+gcc -O3 -s -march=native -Wall -o maniaplayer_native.exe maniaplayer.c -lgdi32 -luser32 -lwinmm
 ```
 
 ---

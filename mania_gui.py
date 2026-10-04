@@ -156,9 +156,9 @@ def get_harness_module():
 class ModernManiaApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Osu!Mania Player v1.2.3")
-        self.root.geometry("540x680")
-        self.root.minsize(500, 620)
+        self.root.title("Osu!Mania Player v1.3.0")
+        self.root.geometry("540x820")
+        self.root.minsize(500, 740)
         self.root.configure(bg="#0f172a")
 
         # Global input controller
@@ -168,6 +168,7 @@ class ModernManiaApp:
         self.is_running = False
         self.p_status = True
         self.bot_thread = None
+        self.active_skill_sim = None
 
         # Window not always on top by default to prevent awkward maneuvering
         self.stay_on_top = tk.BooleanVar(value=False)
@@ -185,6 +186,14 @@ class ModernManiaApp:
         # Delay & Skill Level settings (milliseconds)
         self.input_delay_ms = 0
         self.skill_level = 0
+        self.misread_chance = 0   # % chance a note press is misread
+        self.misread_ms = 0       # lane ignores input for this long after a misread
+        self.stamina_max = 0      # max clicks in stamina pool (0 = off)
+        self.stamina_regen = 0.0  # stamina regenerated per 20 ms
+        self.strain_step_pct = 0    # every X% stamina lost (0 = off)
+        self.strain_misread_pct = 0 # misread chance increases by y%
+        self.strain_skill_ms = 0    # skill delay variance increases by z ms
+        self.strain_regen_pct = 0   # stamina regen decreased by Z%
 
         # Load initial config from mania_config.json if available
         base_dir = get_base_dir()
@@ -200,6 +209,14 @@ class ModernManiaApp:
                 self.active_jl = int(cfg_data.get("judgement_line", self.active_jl))
                 self.input_delay_ms = int(cfg_data.get("input_delay_ms", cfg_data.get("delay_ms", 0)))
                 self.skill_level = int(cfg_data.get("skill_level", cfg_data.get("skill_level_ms", cfg_data.get("input_variance_ms", 0))))
+                self.misread_chance = min(100.0, max(0.0, float(cfg_data.get("misread_chance", 0))))
+                self.misread_ms = max(0.0, float(cfg_data.get("misread_ms", 0)))
+                self.stamina_max = max(0.0, float(cfg_data.get("stamina_max", 0)))
+                self.stamina_regen = max(0.0, float(cfg_data.get("stamina_regen", 0.0)))
+                self.strain_step_pct = max(0.0, float(cfg_data.get("strain_step_pct", 0)))
+                self.strain_misread_pct = max(0.0, float(cfg_data.get("strain_misread_pct", 0)))
+                self.strain_skill_ms = max(0.0, float(cfg_data.get("strain_skill_ms", 0)))
+                self.strain_regen_pct = max(0.0, float(cfg_data.get("strain_regen_pct", 0)))
                 c_lanes = cfg_data.get("lanes", [])
                 if c_lanes:
                     self.key_count = min(20, max(1, len(c_lanes)))
@@ -210,6 +227,14 @@ class ModernManiaApp:
         else:
             self.input_delay_ms = int(getattr(maniaplayer, "INPUT_DELAY_MS", getattr(maniaplayer, "DELAY_MS", 0)))
             self.skill_level = int(getattr(maniaplayer, "SKILL_LEVEL", getattr(maniaplayer, "SKILL_LEVEL_MS", 0)))
+            self.misread_chance = float(getattr(maniaplayer, "MISREAD_CHANCE", 0))
+            self.misread_ms = float(getattr(maniaplayer, "MISREAD_MS", 0))
+            self.stamina_max = float(getattr(maniaplayer, "STAMINA_MAX", 0))
+            self.stamina_regen = float(getattr(maniaplayer, "STAMINA_REGEN", 0.0))
+            self.strain_step_pct = float(getattr(maniaplayer, "STRAIN_STEP_PCT", 0))
+            self.strain_misread_pct = float(getattr(maniaplayer, "STRAIN_MISREAD_PCT", 0))
+            self.strain_skill_ms = float(getattr(maniaplayer, "STRAIN_SKILL_MS", 0))
+            self.strain_regen_pct = float(getattr(maniaplayer, "STRAIN_REGEN_PCT", 0))
             if hasattr(maniaplayer, "LANES") and hasattr(maniaplayer, "KEYS"):
                 self.key_count = min(20, max(1, len(maniaplayer.LANES)))
                 self.active_lanes = list(maniaplayer.LANES[:self.key_count])
@@ -260,13 +285,13 @@ class ModernManiaApp:
         title_box.pack(side=tk.LEFT)
 
         lbl_title = tk.Label(
-            title_box, text="Osu!Mania Player v1.2.3",
+            title_box, text="Osu!Mania Player v1.3.0",
             bg="#1e293b", fg="#f8fafc", font=("Segoe UI", 14, "bold")
         )
         lbl_title.pack(anchor="w")
 
         lbl_sub = tk.Label(
-            title_box, text="Ultra-Fast Screen Engine | v1.2.3 Standalone",
+            title_box, text="Ultra-Fast Screen Engine | v1.3.0 Standalone",
             bg="#1e293b", fg="#94a3b8", font=("Segoe UI", 8)
         )
         lbl_sub.pack(anchor="w")
@@ -368,7 +393,62 @@ class ModernManiaApp:
         self.lane_pads = []
         self._rebuild_lane_visualizer()
 
-        # 5. Configuration Display Card
+        # 5. Live Skill & Stamina Monitor Card
+        self.skill_monitor_frame = tk.LabelFrame(
+            self.root, text="⚡ LIVE SKILL & STAMINA MONITOR",
+            bg="#0f172a", fg="#38bdf8", font=("Segoe UI", 9, "bold"), padx=10, pady=8
+        )
+        self.skill_monitor_frame.pack(side=tk.TOP, fill=tk.X, padx=12, pady=(0, 6))
+
+        # Stamina row header
+        sta_row = tk.Frame(self.skill_monitor_frame, bg="#0f172a")
+        sta_row.pack(fill=tk.X, pady=(0, 2))
+
+        lbl_sta_title = tk.Label(
+            sta_row, text="Stamina Pool", bg="#0f172a", fg="#34d399",
+            font=("Segoe UI", 8, "bold")
+        )
+        lbl_sta_title.pack(side=tk.LEFT)
+
+        self.lbl_live_stamina = tk.Label(
+            sta_row, text="-- / -- (100%)", bg="#0f172a", fg="#f8fafc",
+            font=("Consolas", 8, "bold")
+        )
+        self.lbl_live_stamina.pack(side=tk.RIGHT)
+
+        # Stamina progress bar canvas
+        self.canvas_stamina_bar = tk.Canvas(
+            self.skill_monitor_frame, bg="#1e293b", height=10,
+            highlightthickness=1, highlightbackground="#334155"
+        )
+        self.canvas_stamina_bar.pack(fill=tk.X, pady=(2, 6))
+
+        # 2-column cards for Regen & Misread
+        stats_row = tk.Frame(self.skill_monitor_frame, bg="#0f172a")
+        stats_row.pack(fill=tk.X, pady=(0, 4))
+
+        card_regen = tk.Frame(stats_row, bg="#1e293b", padx=8, pady=4, highlightthickness=1, highlightbackground="#334155")
+        card_regen.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 3))
+        tk.Label(card_regen, text="Stamina Regen", bg="#1e293b", fg="#94a3b8", font=("Segoe UI", 7, "bold")).pack(anchor="w")
+        self.lbl_live_regen = tk.Label(card_regen, text="--", bg="#1e293b", fg="#34d399", font=("Consolas", 9, "bold"))
+        self.lbl_live_regen.pack(anchor="w")
+
+        card_misread = tk.Frame(stats_row, bg="#1e293b", padx=8, pady=4, highlightthickness=1, highlightbackground="#334155")
+        card_misread.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(3, 0))
+        tk.Label(card_misread, text="Misread Chance", bg="#1e293b", fg="#94a3b8", font=("Segoe UI", 7, "bold")).pack(anchor="w")
+        self.lbl_live_misread = tk.Label(card_misread, text="--", bg="#1e293b", fg="#fb7185", font=("Consolas", 9, "bold"))
+        self.lbl_live_misread.pack(anchor="w")
+
+        # Strain telemetry box
+        strain_box = tk.Frame(self.skill_monitor_frame, bg="#1e293b", padx=8, pady=3, highlightthickness=1, highlightbackground="#334155")
+        strain_box.pack(fill=tk.X, pady=(2, 0))
+        self.lbl_live_strain = tk.Label(
+            strain_box, text="Strain: Nominal", bg="#1e293b", fg="#f59e0b",
+            font=("Segoe UI", 8), anchor="w"
+        )
+        self.lbl_live_strain.pack(fill=tk.X)
+
+        # 6. Configuration Display Card
         cfg_frame = tk.LabelFrame(
             self.root, text="Active Script Coordinates & Keybinds",
             bg="#0f172a", fg="#38bdf8", font=("Segoe UI", 9, "bold"), padx=10, pady=6
@@ -545,6 +625,14 @@ class ModernManiaApp:
             cfg["delay_ms"] = self.input_delay_ms
             cfg["skill_level"] = self.skill_level
             cfg["skill_level_ms"] = self.skill_level
+            cfg["misread_chance"] = self.misread_chance
+            cfg["misread_ms"] = self.misread_ms
+            cfg["stamina_max"] = self.stamina_max
+            cfg["stamina_regen"] = self.stamina_regen
+            cfg["strain_step_pct"] = self.strain_step_pct
+            cfg["strain_misread_pct"] = self.strain_misread_pct
+            cfg["strain_skill_ms"] = self.strain_skill_ms
+            cfg["strain_regen_pct"] = self.strain_regen_pct
             cfg["key_count"] = self.key_count
             cfg["lanes"] = [
                 {
@@ -565,6 +653,14 @@ class ModernManiaApp:
                 "delay_ms": self.input_delay_ms,
                 "skill_level": self.skill_level,
                 "skill_level_ms": self.skill_level,
+                "misread_chance": self.misread_chance,
+                "misread_ms": self.misread_ms,
+                "stamina_max": self.stamina_max,
+                "stamina_regen": self.stamina_regen,
+                "strain_step_pct": self.strain_step_pct,
+                "strain_misread_pct": self.strain_misread_pct,
+                "strain_skill_ms": self.strain_skill_ms,
+                "strain_regen_pct": self.strain_regen_pct,
                 "global_threshold": 30,
                 "input_mode": "hold",
                 "lanes": cfg["lanes"]
@@ -598,7 +694,7 @@ class ModernManiaApp:
         self.lbl_cfg_lanes.config(text=lanes_str)
         self.lbl_cfg_jl.config(text=f"JUDGEMENENT_LINE: {self.active_jl}")
         if hasattr(self, "lbl_cfg_delay"):
-            skill_text = f" | Skill: ±{self.skill_level} ms" if self.skill_level > 0 else " | Skill: Off (0 ms)"
+            skill_text = f" | Skill: ±{self._round_fmt(self.skill_level, 1)} ms" if self.skill_level > 0 else " | Skill: Off (0 ms)"
             self.lbl_cfg_delay.config(text=f"Input Delay: {self.input_delay_ms} ms{skill_text}")
 
         for i in range(min(len(self.lane_pads), self.key_count)):
@@ -615,13 +711,22 @@ class ModernManiaApp:
         else:
             messagebox.showerror("Reload Failed", f"Could not load script:\n{load_error}")
 
-    def on_calibrator_update(self, bbox, judgement_line, lanes, keys=None, delay_ms=None, skill_level=None):
+    def on_calibrator_update(self, bbox, judgement_line, lanes, keys=None, delay_ms=None, skill_level=None, skill_extras=None):
         """Callback invoked when Calibrator saves or applies new coordinates, keys, delay, or skill variance."""
         new_count = len(lanes)
         if delay_ms is not None:
             self.input_delay_ms = max(0, int(delay_ms))
         if skill_level is not None:
             self.skill_level = max(0, int(skill_level))
+        if skill_extras:
+            self.misread_chance = min(100.0, max(0.0, float(skill_extras.get("misread_chance", self.misread_chance))))
+            self.misread_ms = max(0.0, float(skill_extras.get("misread_ms", self.misread_ms)))
+            self.stamina_max = max(0.0, float(skill_extras.get("stamina_max", self.stamina_max)))
+            self.stamina_regen = max(0.0, float(skill_extras.get("stamina_regen", self.stamina_regen)))
+            self.strain_step_pct = max(0.0, float(skill_extras.get("strain_step_pct", self.strain_step_pct)))
+            self.strain_misread_pct = max(0.0, float(skill_extras.get("strain_misread_pct", self.strain_misread_pct)))
+            self.strain_skill_ms = max(0.0, float(skill_extras.get("strain_skill_ms", self.strain_skill_ms)))
+            self.strain_regen_pct = max(0.0, float(skill_extras.get("strain_regen_pct", self.strain_regen_pct)))
 
         if LOADED_MANIA and maniaplayer:
             try:
@@ -632,6 +737,14 @@ class ModernManiaApp:
                 maniaplayer.DELAY_MS = self.input_delay_ms
                 maniaplayer.SKILL_LEVEL = self.skill_level
                 maniaplayer.SKILL_LEVEL_MS = self.skill_level
+                maniaplayer.MISREAD_CHANCE = self.misread_chance
+                maniaplayer.MISREAD_MS = self.misread_ms
+                maniaplayer.STAMINA_MAX = self.stamina_max
+                maniaplayer.STAMINA_REGEN = self.stamina_regen
+                maniaplayer.STRAIN_STEP_PCT = self.strain_step_pct
+                maniaplayer.STRAIN_MISREAD_PCT = self.strain_misread_pct
+                maniaplayer.STRAIN_SKILL_MS = self.strain_skill_ms
+                maniaplayer.STRAIN_REGEN_PCT = self.strain_regen_pct
                 if keys:
                     maniaplayer.KEYS = [str(k).lower() for k in keys]
                 for i in range(min(4, len(lanes))):
@@ -656,7 +769,7 @@ class ModernManiaApp:
 
         self.config_updated = True
         keys_str = "/".join(self.active_keys).upper()
-        skill_str = f" | Skill: ±{self.skill_level}ms" if self.skill_level > 0 else ""
+        skill_str = f" | Skill: ±{self._round_fmt(self.skill_level, 1)}ms" if self.skill_level > 0 else ""
         self.lbl_status_sub.config(text=f"Updated: {self.key_count} Keys [{keys_str}] | Delay: {self.input_delay_ms}ms{skill_str} | BBOX {bbox}")
 
 
@@ -763,6 +876,25 @@ class ModernManiaApp:
                 pass
         self.lane_states = [False] * self.key_count
 
+    def _make_skill_sim(self, num_lanes):
+        """Builds a Misread/Stamina/Strain SkillSimulator from current settings; None when features are off."""
+        sim_cls = getattr(maniaplayer, "SkillSimulator", None) if LOADED_MANIA else None
+        if sim_cls is None:
+            return None
+        sim = sim_cls(
+            num_lanes,
+            misread_chance=self.misread_chance,
+            misread_ms=self.misread_ms,
+            stamina_max=self.stamina_max,
+            stamina_regen=self.stamina_regen,
+            strain_step_pct=self.strain_step_pct,
+            strain_misread_pct=self.strain_misread_pct,
+            strain_skill_ms=self.strain_skill_ms,
+            strain_regen_pct=self.strain_regen_pct,
+            base_skill_level=self.skill_level,
+        )
+        return sim if sim.enabled else None
+
     def _bot_worker(self):
         """Ultra-fast capture worker achieving 60-240+ FPS with dynamic coordinate & key reloading (1-20 keys).
         Fully optimized for 7K-20K layouts: pre-packed lane records, binary min-heap for delay/jitter,
@@ -779,7 +911,10 @@ class ModernManiaApp:
         event_seq = 0
         delay_sec = max(0.0, float(self.input_delay_ms) / 1000.0)
         skill_level = self.skill_level
-        has_delay_or_skill = (delay_sec > 0 or skill_level > 0)
+        skill_sim = self._make_skill_sim(num_lanes)
+        self.active_skill_sim = skill_sim
+        has_delay_or_skill = (delay_sec > 0 or skill_level > 0 or (skill_sim is not None and (skill_sim.curr_skill_level > 0 or skill_sim.strain_skill_ms > 0)))
+        lane_skipped = [False] * num_lanes
         thresh_sums = tuple(90 for _ in range(num_lanes))
 
         if HAS_MSS:
@@ -830,7 +965,10 @@ class ModernManiaApp:
                             thresh_sums = tuple(90 for _ in range(num_lanes))
                             delay_sec = max(0.0, float(self.input_delay_ms) / 1000.0)
                             skill_level = self.skill_level
-                            has_delay_or_skill = (delay_sec > 0 or skill_level > 0)
+                            skill_sim = self._make_skill_sim(num_lanes)
+                            self.active_skill_sim = skill_sim
+                            has_delay_or_skill = (delay_sec > 0 or skill_level > 0 or (skill_sim is not None and (skill_sim.curr_skill_level > 0 or skill_sim.strain_skill_ms > 0)))
+                            lane_skipped = [False] * num_lanes
                             delayed_events.clear()
                             monitor = {
                                 "left": bbox[0],
@@ -872,8 +1010,13 @@ class ModernManiaApp:
                             if hit:
                                 if not pressed_states[i]:
                                     pressed_states[i] = True
+                                    if skill_sim is not None and not skill_sim.allow_press(i, t_now):
+                                        lane_skipped[i] = True
+                                        continue
+                                    lane_skipped[i] = False
                                     if has_delay_or_skill:
-                                        var_sec = (random.uniform(-skill_level, skill_level) / 1000.0) if skill_level > 0 else 0.0
+                                        eff_skill = skill_sim.curr_skill_level if skill_sim is not None else skill_level
+                                        var_sec = (random.uniform(-eff_skill, eff_skill) / 1000.0) if eff_skill > 0 else 0.0
                                         eff_delay = max(0.0, delay_sec + var_sec)
                                         lane_hold_offsets[i] = eff_delay
                                         if eff_delay > 0:
@@ -892,6 +1035,9 @@ class ModernManiaApp:
                             else:
                                 if pressed_states[i]:
                                     pressed_states[i] = False
+                                    if lane_skipped[i]:
+                                        lane_skipped[i] = False
+                                        continue
                                     if has_delay_or_skill:
                                         hold_offset = lane_hold_offsets[i]
                                         if hold_offset > 0:
@@ -916,6 +1062,7 @@ class ModernManiaApp:
                         self.loop_count += 1
 
                     # Cleanup on stop
+                    self.active_skill_sim = None
                     delayed_events.clear()
                     for k in keys:
                         try:
@@ -924,7 +1071,7 @@ class ModernManiaApp:
                             pass
                     return
             except Exception:
-                pass
+                self.active_skill_sim = None
 
         # Fallback using standard ImageGrab.grab()
         while self.is_running and self.p_status:
@@ -941,7 +1088,10 @@ class ModernManiaApp:
                     thresh_sums = tuple(90 for _ in range(num_lanes))
                     delay_sec = max(0.0, float(self.input_delay_ms) / 1000.0)
                     skill_level = self.skill_level
-                    has_delay_or_skill = (delay_sec > 0 or skill_level > 0)
+                    skill_sim = self._make_skill_sim(num_lanes)
+                    self.active_skill_sim = skill_sim
+                    has_delay_or_skill = (delay_sec > 0 or skill_level > 0 or (skill_sim is not None and (skill_sim.curr_skill_level > 0 or skill_sim.strain_skill_ms > 0)))
+                    lane_skipped = [False] * num_lanes
                     delayed_events.clear()
                     self.config_updated = False
 
@@ -977,8 +1127,13 @@ class ModernManiaApp:
                     if hit:
                         if not pressed_states[i]:
                             pressed_states[i] = True
+                            if skill_sim is not None and not skill_sim.allow_press(i, t_now):
+                                lane_skipped[i] = True
+                                continue
+                            lane_skipped[i] = False
                             if has_delay_or_skill:
-                                var_sec = (random.uniform(-skill_level, skill_level) / 1000.0) if skill_level > 0 else 0.0
+                                eff_skill = skill_sim.curr_skill_level if skill_sim is not None else skill_level
+                                var_sec = (random.uniform(-eff_skill, eff_skill) / 1000.0) if eff_skill > 0 else 0.0
                                 eff_delay = max(0.0, delay_sec + var_sec)
                                 lane_hold_offsets[i] = eff_delay
                                 if eff_delay > 0:
@@ -997,6 +1152,9 @@ class ModernManiaApp:
                     else:
                         if pressed_states[i]:
                             pressed_states[i] = False
+                            if lane_skipped[i]:
+                                lane_skipped[i] = False
+                                continue
                             if has_delay_or_skill:
                                 hold_offset = lane_hold_offsets[i]
                                 if hold_offset > 0:
@@ -1022,6 +1180,7 @@ class ModernManiaApp:
                 pass
 
         # Cleanup fallback
+        self.active_skill_sim = None
         delayed_events.clear()
         for k in keys:
             try:
@@ -1048,6 +1207,18 @@ class ModernManiaApp:
         self.listener.daemon = True
         self.listener.start()
 
+    @staticmethod
+    def _round_fmt(val, decimals=1):
+        """Rounds a float and formats it cleanly without long trailing zeroes (e.g. 5.0 -> '5', 5.25 -> '5.3')."""
+        try:
+            f = float(val)
+            r = round(f, decimals)
+            if r.is_integer():
+                return str(int(r))
+            return f"{r:.{decimals}f}".rstrip("0").rstrip(".")
+        except Exception:
+            return str(val)
+
     # -------------------------------------------------------------
     # UI Refresh Loop (FPS & Lane Visualizer)
     # -------------------------------------------------------------
@@ -1059,7 +1230,7 @@ class ModernManiaApp:
             elapsed = now - self.last_fps_time
             if elapsed >= 1.0:
                 self.current_fps = round(self.loop_count / elapsed, 1)
-                self.lbl_fps.config(text=f"{self.current_fps} FPS")
+                self.lbl_fps.config(text=f"{self._round_fmt(self.current_fps, 1)} FPS")
                 self.loop_count = 0
                 self.last_fps_time = now
 
@@ -1082,6 +1253,121 @@ class ModernManiaApp:
                         l_name.config(bg="#0f172a", fg="#94a3b8")
                         l_key.config(bg="#0f172a", fg=color)
                         l_state.config(bg="#0f172a", fg="#64748b", text="OFF")
+
+            # Live Skill / Stamina / Misread / Strain Display
+            if hasattr(self, "lbl_live_stamina"):
+                if self.active_skill_sim is not None:
+                    stats = self.active_skill_sim.get_live_stats()
+                    stamina = stats["stamina"]
+                    stamina_max = stats["stamina_max"]
+                    stamina_pct = stats["stamina_pct"]
+                    steps = stats["strain_steps"]
+                    misread_chance = stats["misread_chance"]
+                    regen_per_20ms = stats["regen_per_20ms"]
+
+                    if stamina_max > 0:
+                        s_cur = self._round_fmt(stamina, 1)
+                        s_max = self._round_fmt(stamina_max, 1)
+                        s_pct = round(stamina_pct)
+                        self.lbl_live_stamina.config(text=f"{s_cur} / {s_max} ({s_pct:.0f}%)")
+                        c_w = self.canvas_stamina_bar.winfo_width()
+                        c_h = self.canvas_stamina_bar.winfo_height()
+                        if c_w > 10 and c_h > 2:
+                            self.canvas_stamina_bar.delete("bar")
+                            fill_w = max(0, min(c_w, int(c_w * (stamina / stamina_max))))
+                            bar_color = "#10b981" if stamina_pct > 50 else ("#f59e0b" if stamina_pct > 20 else "#ef4444")
+                            if fill_w > 0:
+                                self.canvas_stamina_bar.create_rectangle(0, 0, fill_w, c_h, fill=bar_color, width=0, tags="bar")
+                    else:
+                        self.lbl_live_stamina.config(text="Unlimited (Off)")
+                        c_w = self.canvas_stamina_bar.winfo_width()
+                        c_h = self.canvas_stamina_bar.winfo_height()
+                        if c_w > 10 and c_h > 2:
+                            self.canvas_stamina_bar.delete("bar")
+                            self.canvas_stamina_bar.create_rectangle(0, 0, c_w, c_h, fill="#334155", width=0, tags="bar")
+
+                    # Stamina Regen
+                    if stamina_max > 0:
+                        reg_str = self._round_fmt(regen_per_20ms, 2)
+                        if steps > 0 and self.strain_regen_pct > 0:
+                            red_pct = self._round_fmt(min(100.0, steps * self.strain_regen_pct), 1)
+                            self.lbl_live_regen.config(text=f"+{reg_str}/20ms (-{red_pct}%)", fg="#f59e0b" if float(red_pct) < 100 else "#ef4444")
+                        else:
+                            self.lbl_live_regen.config(text=f"+{reg_str}/20ms", fg="#34d399")
+                    else:
+                        self.lbl_live_regen.config(text="Off", fg="#64748b")
+
+                    # Misread Chance
+                    if misread_chance > 0 or self.misread_chance > 0:
+                        mis_str = self._round_fmt(misread_chance, 1)
+                        if steps > 0 and self.strain_misread_pct > 0:
+                            add_pct = self._round_fmt(steps * self.strain_misread_pct, 1)
+                            self.lbl_live_misread.config(text=f"{mis_str}% (+{add_pct}%)", fg="#fb7185")
+                        else:
+                            dur_str = self._round_fmt(self.misread_ms, 1)
+                            self.lbl_live_misread.config(text=f"{mis_str}% ({dur_str}ms)", fg="#fb7185")
+                    else:
+                        self.lbl_live_misread.config(text="0% (Off)", fg="#64748b")
+
+                    # Strain Status
+                    if self.strain_step_pct > 0 and stamina_max > 0:
+                        if steps > 0:
+                            mis_add = self._round_fmt(steps * self.strain_misread_pct, 1)
+                            del_add = self._round_fmt(steps * self.strain_skill_ms, 1)
+                            reg_sub = self._round_fmt(steps * self.strain_regen_pct, 1)
+                            self.lbl_live_strain.config(
+                                text=f"Strain: Tier {steps} (+{mis_add}% Misread, +{del_add}ms Delay, -{reg_sub}% Regen)",
+                                fg="#f97316"
+                            )
+                        else:
+                            lost_pct = max(0.0, (1.0 - (stamina / stamina_max)) * 100.0)
+                            rem = self.strain_step_pct - (lost_pct % self.strain_step_pct)
+                            rem_str = self._round_fmt(rem, 1)
+                            self.lbl_live_strain.config(
+                                text=f"Strain: Nominal (Step in {rem_str}% loss)",
+                                fg="#94a3b8"
+                            )
+                    else:
+                        self.lbl_live_strain.config(text="Strain: Off", fg="#64748b")
+                else:
+                    # Idle / bot stopped
+                    if self.stamina_max > 0:
+                        s_max = self._round_fmt(self.stamina_max, 1)
+                        self.lbl_live_stamina.config(text=f"{s_max} clicks (Ready)")
+                        c_w = self.canvas_stamina_bar.winfo_width()
+                        c_h = self.canvas_stamina_bar.winfo_height()
+                        if c_w > 10 and c_h > 2:
+                            self.canvas_stamina_bar.delete("bar")
+                            self.canvas_stamina_bar.create_rectangle(0, 0, c_w, c_h, fill="#10b981", width=0, tags="bar")
+                        r_str = self._round_fmt(self.stamina_regen, 2)
+                        self.lbl_live_regen.config(text=f"+{r_str}/20ms", fg="#34d399")
+                    else:
+                        self.lbl_live_stamina.config(text="Unlimited (Off)")
+                        c_w = self.canvas_stamina_bar.winfo_width()
+                        c_h = self.canvas_stamina_bar.winfo_height()
+                        if c_w > 10 and c_h > 2:
+                            self.canvas_stamina_bar.delete("bar")
+                            self.canvas_stamina_bar.create_rectangle(0, 0, c_w, c_h, fill="#334155", width=0, tags="bar")
+                        self.lbl_live_regen.config(text="Off", fg="#64748b")
+
+                    if self.misread_chance > 0:
+                        m_str = self._round_fmt(self.misread_chance, 1)
+                        d_str = self._round_fmt(self.misread_ms, 1)
+                        self.lbl_live_misread.config(text=f"{m_str}% ({d_str}ms)", fg="#fb7185")
+                    else:
+                        self.lbl_live_misread.config(text="0% (Off)", fg="#64748b")
+
+                    if self.strain_step_pct > 0 and self.stamina_max > 0:
+                        s_step = self._round_fmt(self.strain_step_pct, 1)
+                        s_mis = self._round_fmt(self.strain_misread_pct, 1)
+                        s_ms = self._round_fmt(self.strain_skill_ms, 1)
+                        s_reg = self._round_fmt(self.strain_regen_pct, 1)
+                        self.lbl_live_strain.config(
+                            text=f"Strain: Every {s_step}% lost (+{s_mis}%, +{s_ms}ms, -{s_reg}%)",
+                            fg="#94a3b8"
+                        )
+                    else:
+                        self.lbl_live_strain.config(text="Strain: Off", fg="#64748b")
 
             self.root.after(30, refresh)
 
