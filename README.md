@@ -200,7 +200,7 @@ graph TD
 To produce human-like, non-robotic gameplay, ManiaPlayer features a customizable physical simulation engine operating across both Python and Native C engines:
 
 ### 1. Skill Level Jitter (`skill_level`)
-- Adds random uniform input variance between $[-\text{skill\_level}, +\text{skill\_level}]$ ms to every note press.
+- Adds random uniform input variance between $[-\text{SkillLevel}, +\text{SkillLevel}]\text{ ms}$ to every note press.
 - Example: With `skill_level = 5`, note presses naturally deviate between $-5\text{ ms}$ and $+5\text{ ms}$, simulating natural human finger inaccuracy.
 
 ### 2. Misread System (`misread_chance` & `misread_ms`)
@@ -215,12 +215,12 @@ To produce human-like, non-robotic gameplay, ManiaPlayer features a customizable
 ### 4. Dynamic Strain (Cumulative Fatigue Debuffs)
 As stamina depletes during dense streams and chordjacks, player fatigue intensifies:
 - **Calculation**:
-  $$\text{lost\_pct} = \max\left(0, \left(1.0 - \frac{\text{stamina}}{\text{stamina\_max}}\right) \times 100\right)$$
-  $$\text{steps} = \left\lfloor \frac{\text{lost\_pct}}{\text{strain\_step\_pct}} \right\rfloor \quad (\text{when } \text{strain\_step\_pct} > 0)$$
+  $$\text{LostPct} = \max\left(0, \left(1.0 - \frac{\text{Stamina}}{\text{StaminaMax}}\right) \times 100\right)$$
+  $$\text{Steps} = \left\lfloor \frac{\text{LostPct}}{\text{StrainStepPct}} \right\rfloor \quad (\text{when } \text{StrainStepPct} > 0)$$
 - **Additive Penalties**:
-  - **Misread Chance**: $\text{eff\_misread} = \min\left(100\%, \text{base} + (\text{steps} \times \text{strain\_misread\_pct})\right)$
-  - **Skill Jitter**: $\text{eff\_jitter} = \text{base} + (\text{steps} \times \text{strain\_skill\_ms})\text{ ms}$
-  - **Stamina Regen**: $\text{eff\_regen} = \text{base} \times \max\left(0.0, 1.0 - \frac{\text{steps} \times \text{strain\_regen\_pct}}{100}\right)$
+  - **Misread Chance**: $\text{EffMisread} = \min\left(100\%, \text{BaseMisread} + (\text{Steps} \times \text{StrainMisreadPct})\right)$
+  - **Skill Jitter**: $\text{EffJitter} = \text{BaseSkillLevel} + (\text{Steps} \times \text{StrainSkillMs})\text{ ms}$
+  - **Stamina Regen**: $\text{EffRegen} = \text{BaseRegen} \times \max\left(0.0, 1.0 - \frac{\text{Steps} \times \text{StrainRegenPct}}{100}\right)$
 
 ### 5. Live Skill & Stamina Monitor in GUI
 - **Live Stamina Gauge**: Numerical click readout and animated progress bar with dynamic color transitions (Green $> 50\%$, Amber $20\text{--}50\%$, Red $< 20\%$).
