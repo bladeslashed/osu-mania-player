@@ -8,6 +8,7 @@
   "judgement_line": 0,
   "input_delay_ms": 6,
   "delay_ms": 6,
+  "skill_level": 0,
   "global_threshold": 30,
   "input_mode": "hold",
   "lanes": [

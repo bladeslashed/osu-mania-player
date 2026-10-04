@@ -165,8 +165,7 @@ DEFAULT_KEY_LAYOUTS = {
 
 ALL_20_KEYS = [
     "q", "w", "e", "r", "t", "y", "u", "i", "o", "p",
-    "a", "s", "d", "f", "g", "h", "j", "k", "l", ";",
-    "z", "x", "c", "v", "b", "n", "m", ",", ".", "/", "-", "="
+    "a", "s", "d", "f", "g", "h", "j", "k", "l", ";"
 ]
 
 
@@ -225,6 +224,8 @@ class ManiaHarnessApp:
         self.judgement_line = 0
         self.input_delay_ms = 0
         self.var_delay_ms = tk.IntVar(value=0)
+        self.skill_level = 0
+        self.var_skill_level = tk.IntVar(value=0)
 
         # Lane target positions (relative to bbox_left) and keybinds (1 to 20 keys)
         self.key_count = 4
@@ -583,10 +584,44 @@ class ManiaHarnessApp:
         btn_p1.pack(side=tk.RIGHT, padx=1)
 
         lbl_delay_desc = tk.Label(
-            delay_frame, text="Delays key presses & releases by X ms for timing offset calibration.",
+            delay_frame, text="Input Delay: Delays key presses & releases by X ms for timing offset.",
             bg=self.bg_panel, fg=self.fg_dim, font=("Segoe UI", 7), justify="left", anchor="w"
         )
         lbl_delay_desc.pack(fill=tk.X, pady=(2, 0))
+
+        # Skill Level row (random input variance from -X to +X ms)
+        row_s1 = tk.Frame(delay_frame, bg=self.bg_panel)
+        row_s1.pack(fill=tk.X, pady=(4, 2))
+
+        tk.Label(row_s1, text="Skill Level:", bg=self.bg_panel, fg=self.fg_main, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 4))
+
+        self.spin_skill_level = tk.Spinbox(
+            row_s1, from_=0, to=500, textvariable=self.var_skill_level, width=5,
+            bg=self.bg_input, fg="#a78bfa", font=("Consolas", 9, "bold"), justify="center", relief="flat",
+            command=self._on_skill_level_changed
+        )
+        self.spin_skill_level.pack(side=tk.LEFT, padx=2)
+        self.spin_skill_level.bind("<KeyRelease>", lambda e: self._on_skill_level_changed())
+
+        tk.Label(row_s1, text="±ms", bg=self.bg_panel, fg=self.fg_dim, font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(2, 6))
+
+        for s_val, s_lbl in ((0, "Off (0)"), (5, "Pro (5)"), (12, "Mid (12)"), (20, "Low (20)")):
+            btn_s = tk.Button(
+                row_s1, text=s_lbl, bg="#3f3f46", fg="white", font=("Segoe UI", 7, "bold"),
+                relief="flat", padx=3, pady=1, command=lambda sv=s_val: self.set_skill_level(sv)
+            )
+            btn_s.pack(side=tk.LEFT, padx=1)
+
+        btn_sm1 = tk.Button(row_s1, text="-1", bg="#3f3f46", fg=self.fg_dim, font=("Segoe UI", 7), relief="flat", padx=2, pady=1, command=lambda: self.adjust_skill_level(-1))
+        btn_sm1.pack(side=tk.RIGHT, padx=1)
+        btn_sp1 = tk.Button(row_s1, text="+1", bg="#3f3f46", fg=self.fg_dim, font=("Segoe UI", 7), relief="flat", padx=2, pady=1, command=lambda: self.adjust_skill_level(1))
+        btn_sp1.pack(side=tk.RIGHT, padx=1)
+
+        lbl_skill_desc = tk.Label(
+            delay_frame, text="Skill Level: Adds random input variance from -X to +X ms (humanization).",
+            bg=self.bg_panel, fg=self.fg_dim, font=("Segoe UI", 7), justify="left", anchor="w"
+        )
+        lbl_skill_desc.pack(fill=tk.X, pady=(1, 0))
 
         # 3. Lanes & Keybinds Inspector Frame (Dynamic 1 to 20 Keys)
         lane_frame = tk.LabelFrame(sidebar, text="Lanes & Keybinds", bg=self.bg_panel, fg=self.accent, font=("Segoe UI", 9, "bold"), padx=8, pady=6)
@@ -998,15 +1033,17 @@ class ManiaHarnessApp:
                     k_list.append(str(l_data.get("key", "q")).strip().lower())
                 self.set_key_count(new_count, rel_x_list=rx_list, keys_list=k_list)
 
-            # Load preset input delay if specified
+            # Load preset input delay & skill level if specified
             delay_val = int(data.get("input_delay_ms", data.get("delay_ms", 0)))
             self.set_input_delay(delay_val)
+            skill_val = int(data.get("skill_level", data.get("skill_level_ms", data.get("input_variance_ms", 0))))
+            self.set_skill_level(skill_val)
 
             self._sync_bbox_to_inputs()
             self.var_jl.set(self.judgement_line)
             self.redraw_canvas()
             self.update_live_preview()
-            self.lbl_status.config(text=f"Loaded preset: {preset_name} ({self.key_count} Keys | Delay: {self.input_delay_ms}ms)")
+            self.lbl_status.config(text=f"Loaded preset: {preset_name} ({self.key_count} Keys | Delay: {self.input_delay_ms}ms | Skill: ±{self.skill_level}ms)")
             if not silent:
                 messagebox.showinfo("Preset Loaded", f"Successfully loaded preset:\n{preset_name} ({self.key_count} Keys)\n\nClick [💾 Save to maniaplayer.py] or [⚡ Apply to Player] to activate it.")
         except Exception as e:
@@ -1051,6 +1088,8 @@ class ManiaHarnessApp:
             "judgement_line": self.judgement_line,
             "input_delay_ms": self.input_delay_ms,
             "delay_ms": self.input_delay_ms,
+            "skill_level": self.skill_level,
+            "skill_level_ms": self.skill_level,
             "global_threshold": 30,
             "lanes": [
                 {
@@ -1716,6 +1755,8 @@ class ManiaHarnessApp:
         self.var_bottom.set(self.bbox_bottom)
         if hasattr(self, "var_delay_ms"):
             self.var_delay_ms.set(self.input_delay_ms)
+        if hasattr(self, "var_skill_level"):
+            self.var_skill_level.set(self.skill_level)
         w = max(1, self.bbox_right - self.bbox_left)
         h = max(1, self.bbox_bottom - self.bbox_top)
         self.lbl_bbox_dims.config(text=f"Width: {w} px | Height: {h} px")
@@ -1747,6 +1788,31 @@ class ManiaHarnessApp:
             curr = self.input_delay_ms
         self.set_input_delay(max(0, curr + delta))
 
+    def _on_skill_level_changed(self):
+        try:
+            val = max(0, int(self.var_skill_level.get()))
+            self.skill_level = val
+            if hasattr(self, "lbl_status"):
+                self.lbl_status.config(text=f"Skill Level set to ±{self.skill_level} ms variance")
+        except Exception:
+            pass
+
+    def set_skill_level(self, ms: int):
+        ms = max(0, int(ms))
+        self.skill_level = ms
+        if hasattr(self, "var_skill_level"):
+            self.var_skill_level.set(ms)
+        if hasattr(self, "lbl_status"):
+            self.lbl_status.config(text=f"Skill Level set to ±{ms} ms variance")
+
+    def adjust_skill_level(self, delta: int):
+        curr = 0
+        try:
+            curr = self.var_skill_level.get() or 0
+        except Exception:
+            curr = self.skill_level
+        self.set_skill_level(max(0, curr + delta))
+
     # -------------------------------------------------------------
     # Live Updates to Mania Player
     # -------------------------------------------------------------
@@ -1768,6 +1834,8 @@ class ManiaHarnessApp:
                     mod.KEYS = keys
                     mod.INPUT_DELAY_MS = self.input_delay_ms
                     mod.DELAY_MS = self.input_delay_ms
+                    mod.SKILL_LEVEL = self.skill_level
+                    mod.SKILL_LEVEL_MS = self.skill_level
                     for i in range(min(4, len(lanes))):
                         setattr(mod, f"LANE{i+1}", lanes[i])
                         setattr(mod, f"KEY{i+1}", keys[i])
@@ -1777,12 +1845,12 @@ class ManiaHarnessApp:
         # 2. Invoke callback to GUI
         if self.on_save_callback:
             try:
-                self.on_save_callback(bbox=bbox, judgement_line=jl, lanes=lanes, keys=keys, delay_ms=self.input_delay_ms)
+                self.on_save_callback(bbox=bbox, judgement_line=jl, lanes=lanes, keys=keys, delay_ms=self.input_delay_ms, skill_level=self.skill_level)
             except Exception as e:
                 print(f"[Callback Warning] {e}")
 
         keys_str = "/".join(keys).upper()
-        self.lbl_status.config(text=f"⚡ Live update applied! {self.key_count} Keys: {keys_str} | Delay: {self.input_delay_ms}ms")
+        self.lbl_status.config(text=f"⚡ Live update applied! {self.key_count} Keys: {keys_str} | Delay: {self.input_delay_ms}ms | Skill: ±{self.skill_level}ms")
 
     # -------------------------------------------------------------
     # Target File Read & Save Logic
@@ -1810,10 +1878,15 @@ class ManiaHarnessApp:
                 if m_jl:
                     self.judgement_line = int(m_jl.group(1))
 
-                # Parse INPUT_DELAY_MS or DELAY_MS
-                m_del = re.search(r"^(?:INPUT_DELAY_MS|DELAY_MS)\s*=\s*(\d+)", content, re.MULTILINE)
+                # Parse INPUT_DELAY_MS or INPUT_DELAY or DELAY_MS
+                m_del = re.search(r"^(?:INPUT_DELAY_MS|INPUT_DELAY|DELAY_MS)\s*=\s*(\d+)", content, re.MULTILINE)
                 if m_del:
                     self.set_input_delay(int(m_del.group(1)))
+
+                # Parse SKILL_LEVEL or SKILL_LEVEL_MS or INPUT_VARIANCE_MS
+                m_skill = re.search(r"^(?:SKILL_LEVEL|SKILL_LEVEL_MS|INPUT_VARIANCE_MS)\s*=\s*(\d+)", content, re.MULTILINE)
+                if m_skill:
+                    self.set_skill_level(int(m_skill.group(1)))
 
                 # Parse dynamic LANES = [...]
                 m_lanes = re.search(r"^LANES\s*=\s*\[([\d\s,]+)\]", content, re.MULTILINE)
@@ -1823,27 +1896,28 @@ class ManiaHarnessApp:
                         loaded_lanes = l_vals
                         loaded_count = len(l_vals)
 
-                # Parse dynamic KEYS = [...]
-                m_keys = re.search(r"^KEYS\s*=\s*(.+)$", content, re.MULTILINE)
+                # Parse dynamic KEYS = [...] (robust to closing bracket key ']')
+                m_keys = re.search(r"^KEYS\s*=\s*([^\r\n#]+)", content, re.MULTILINE)
                 if m_keys:
-                    k_line = m_keys.group(1).strip()
-                    s_idx = k_line.find('[')
-                    e_idx = k_line.rfind(']')
-                    if s_idx != -1 and e_idx > s_idx:
-                        raw_keys_str = k_line[s_idx:e_idx + 1]
+                    raw_keys = m_keys.group(1).strip()
+                    try:
+                        parsed = ast.literal_eval(raw_keys)
+                        if isinstance(parsed, (list, tuple)):
+                            k_vals = [str(k).strip().lower() for k in parsed if str(k).strip()]
+                            if k_vals:
+                                loaded_keys = k_vals
+                    except Exception:
                         try:
-                            parsed_k = ast.literal_eval(raw_keys_str)
-                            if isinstance(parsed_k, (list, tuple)):
-                                loaded_keys = [str(k).lower().strip() for k in parsed_k]
-                        except Exception:
-                            try:
-                                parsed_k = json.loads(raw_keys_str)
-                                if isinstance(parsed_k, list):
-                                    loaded_keys = [str(k).lower().strip() for k in parsed_k]
-                            except Exception:
-                                k_vals = re.findall(r"""['"]([^'"]+)['"]""", raw_keys_str)
+                            parsed = json.loads(raw_keys)
+                            if isinstance(parsed, list):
+                                k_vals = [str(k).strip().lower() for k in parsed if str(k).strip()]
                                 if k_vals:
-                                    loaded_keys = [k.lower().strip() for k in k_vals]
+                                    loaded_keys = k_vals
+                        except Exception:
+                            tokens = re.findall(r"""['"]([^'"]+)['"]|([^,\[\]\s]+)""", raw_keys)
+                            k_vals = [re.sub(r"""['"\s]""", "", (t[0] or t[1])).lower() for t in tokens if (t[0] or t[1]).strip()]
+                            if k_vals:
+                                loaded_keys = k_vals
 
                 # If dynamic arrays weren't found, check LANE1..LANE20
                 if not loaded_lanes:
@@ -1886,6 +1960,10 @@ class ManiaHarnessApp:
                 if "input_delay_ms" in cfg or "delay_ms" in cfg:
                     cfg_delay = int(cfg.get("input_delay_ms", cfg.get("delay_ms", 0)))
                     self.set_input_delay(cfg_delay)
+
+                if "skill_level" in cfg or "skill_level_ms" in cfg or "input_variance_ms" in cfg:
+                    cfg_skill = int(cfg.get("skill_level", cfg.get("skill_level_ms", cfg.get("input_variance_ms", 0))))
+                    self.set_skill_level(cfg_skill)
             except Exception:
                 pass
 
@@ -1922,6 +2000,7 @@ class ManiaHarnessApp:
             f"BBOX = ({self.bbox_left}, {self.bbox_top}, {self.bbox_right}, {self.bbox_bottom})\n"
             f"JUDGEMENENT_LINE = {self.judgement_line}\n"
             f"INPUT_DELAY_MS = {self.input_delay_ms} ms\n"
+            f"SKILL_LEVEL = {self.skill_level} ms (±{self.skill_level} ms variance)\n"
             f"LANES ({self.key_count}K) = {self.lane_rel_x[:self.key_count]}\n"
             f"KEYS = {self.lane_keys[:self.key_count]}\n\n"
             f"A backup will be created in '{self.backups_dir.name}/'. Proceed?"
@@ -1965,6 +2044,15 @@ class ManiaHarnessApp:
                     content, flags=re.MULTILINE
                 )
 
+            if re.search(r"^SKILL_LEVEL\s*=", content, re.MULTILINE):
+                content = re.sub(
+                    r"^(SKILL_LEVEL\s*=\s*).*$",
+                    rf"\g<1>{self.skill_level}",
+                    content, flags=re.MULTILINE
+                )
+            else:
+                content = f"SKILL_LEVEL = {self.skill_level}\n" + content
+
             # Update or insert dynamic LANES and KEYS lists
             lanes_repr = str(self.lane_rel_x[:self.key_count])
             keys_repr = json.dumps(self.lane_keys[:self.key_count])
@@ -1975,7 +2063,7 @@ class ManiaHarnessApp:
                 content = f"LANES = {lanes_repr}\n" + content
 
             if re.search(r"^KEYS\s*=", content, re.MULTILINE):
-                content = re.sub(r"^(KEYS\s*=\s*).*$", lambda m: f"{m.group(1)}{keys_repr}", content, flags=re.MULTILINE)
+                content = re.sub(r"^(KEYS\s*=\s*).*$", rf"\g<1>{keys_repr}", content, flags=re.MULTILINE)
             else:
                 content = f"KEYS = {keys_repr}\n" + content
 
@@ -2025,6 +2113,8 @@ class ManiaHarnessApp:
                     cfg["judgement_line"] = self.judgement_line
                     cfg["input_delay_ms"] = self.input_delay_ms
                     cfg["delay_ms"] = self.input_delay_ms
+                    cfg["skill_level"] = self.skill_level
+                    cfg["skill_level_ms"] = self.skill_level
                     cfg["key_count"] = self.key_count
                     cfg["lanes"] = [
                         {
@@ -2048,6 +2138,8 @@ class ManiaHarnessApp:
                     s_data["judgement_line"] = self.judgement_line
                     s_data["input_delay_ms"] = self.input_delay_ms
                     s_data["delay_ms"] = self.input_delay_ms
+                    s_data["skill_level"] = self.skill_level
+                    s_data["skill_level_ms"] = self.skill_level
                     s_data["lanes"] = [
                         {
                             "name": f"Lane {i+1}",
@@ -2078,6 +2170,7 @@ class ManiaHarnessApp:
             f"# Calibrated coordinates & keybinds for Mania Player ({self.key_count} Keys)\n"
             f"JUDGEMENENT_LINE = {self.judgement_line}\n"
             f"INPUT_DELAY_MS = {self.input_delay_ms}\n"
+            f"SKILL_LEVEL = {self.skill_level}\n"
             f"LANES = {self.lane_rel_x[:self.key_count]}\n"
             f"KEYS = {self.lane_keys[:self.key_count]}\n"
             f"BBOX = ({self.bbox_left}, {self.bbox_top}, {self.bbox_right}, {self.bbox_bottom})\n"

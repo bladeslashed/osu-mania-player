@@ -1,5 +1,5 @@
 @echo off
-title Mania Player Python Engine
+title Osu!Mania Player v1.2.3 (Python Engine)
 python maniaplayer.py
 if %ERRORLEVEL% NEQ 0 (
     echo.

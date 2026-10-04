@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #define MAX_LANES 32
 #define CONFIG_FILE "settings.json"
@@ -27,6 +28,7 @@ typedef struct {
     int judgement_line;
     int global_threshold;
     int input_delay_ms;
+    int skill_level;
     char input_mode[16]; // "hold" or "tap"
     Lane lanes[MAX_LANES];
     int lane_count;
@@ -59,26 +61,9 @@ WORD resolve_vk(const char* key_str) {
     if (_stricmp(key_str, "ctrl") == 0) return VK_CONTROL;
     if (_stricmp(key_str, "enter") == 0) return VK_RETURN;
     if (_stricmp(key_str, "tab") == 0) return VK_TAB;
-    if (_stricmp(key_str, "backspace") == 0) return VK_BACK;
-    if (_stricmp(key_str, "alt") == 0) return VK_MENU;
-    if (_stricmp(key_str, "capslock") == 0) return VK_CAPITAL;
-    if (_stricmp(key_str, "esc") == 0 || _stricmp(key_str, "escape") == 0) return VK_ESCAPE;
-    if (_stricmp(key_str, "bracketleft") == 0 || strcmp(key_str, "[") == 0) return VK_OEM_4;
-    if (_stricmp(key_str, "bracketright") == 0 || strcmp(key_str, "]") == 0) return VK_OEM_6;
-    if (_stricmp(key_str, "semicolon") == 0 || strcmp(key_str, ";") == 0) return VK_OEM_1;
-    if (_stricmp(key_str, "quote") == 0 || strcmp(key_str, "'") == 0) return VK_OEM_7;
-    if (_stricmp(key_str, "comma") == 0 || strcmp(key_str, ",") == 0) return VK_OEM_COMMA;
-    if (_stricmp(key_str, "period") == 0 || strcmp(key_str, ".") == 0) return VK_OEM_PERIOD;
-    if (_stricmp(key_str, "slash") == 0 || strcmp(key_str, "/") == 0) return VK_OEM_2;
-    if (_stricmp(key_str, "backslash") == 0 || strcmp(key_str, "\\") == 0) return VK_OEM_5;
-    if (_stricmp(key_str, "minus") == 0 || strcmp(key_str, "-") == 0) return VK_OEM_MINUS;
-    if (_stricmp(key_str, "equal") == 0 || _stricmp(key_str, "equals") == 0 || strcmp(key_str, "=") == 0) return VK_OEM_PLUS;
 
     SHORT res = VkKeyScanA(key_str[0]);
-    if (res == -1) {
-        if (key_str[0] >= 'a' && key_str[0] <= 'z') return (WORD)(key_str[0] - 'a' + 'A');
-        return (WORD)key_str[0];
-    }
+    if (res == -1) return (WORD)key_str[0];
     return LOBYTE(res);
 }
 
@@ -90,6 +75,7 @@ void set_default_config(AppConfig* cfg) {
     cfg->judgement_line = 0;
     cfg->global_threshold = 30;
     cfg->input_delay_ms = 0;
+    cfg->skill_level = 0;
     strcpy(cfg->input_mode, "hold");
 
     cfg->lane_count = 4;
@@ -173,6 +159,21 @@ bool load_config_file(AppConfig* cfg, const char* filename) {
         }
     }
 
+    char* pSkill = strstr(buf, "\"skill_level\"");
+    if (!pSkill) pSkill = strstr(buf, "\"skill_level_ms\"");
+    if (!pSkill) pSkill = strstr(buf, "\"input_variance_ms\"");
+    if (pSkill) {
+        int sval = 0;
+        if (sscanf(pSkill, "\"skill_level\": %d", &sval) == 1 ||
+            sscanf(pSkill, "\"skill_level\":%d", &sval) == 1 ||
+            sscanf(pSkill, "\"skill_level_ms\": %d", &sval) == 1 ||
+            sscanf(pSkill, "\"skill_level_ms\":%d", &sval) == 1 ||
+            sscanf(pSkill, "\"input_variance_ms\": %d", &sval) == 1 ||
+            sscanf(pSkill, "\"input_variance_ms\":%d", &sval) == 1) {
+            cfg->skill_level = sval;
+        }
+    }
+
     char* pMode = strstr(buf, "\"input_mode\"");
     if (pMode) {
         char m[16] = {0};
@@ -236,6 +237,7 @@ bool save_config_file(const AppConfig* cfg, const char* filename) {
     fprintf(f, "  \"judgement_line\": %d,\n", cfg->judgement_line);
     fprintf(f, "  \"input_delay_ms\": %d,\n", cfg->input_delay_ms);
     fprintf(f, "  \"delay_ms\": %d,\n", cfg->input_delay_ms);
+    fprintf(f, "  \"skill_level\": %d,\n", cfg->skill_level);
     fprintf(f, "  \"global_threshold\": %d,\n", cfg->global_threshold);
     fprintf(f, "  \"input_mode\": \"%s\",\n", cfg->input_mode);
     fprintf(f, "  \"lanes\": [\n");
@@ -253,28 +255,15 @@ bool save_config_file(const AppConfig* cfg, const char* filename) {
     return true;
 }
 
-// Low-level fast keyboard input via SendInput with atomic batching & hardware scancodes
-static inline void send_key_batch(const WORD* vks, const bool* downs, int count) {
-    if (count <= 0) return;
-    INPUT inputs[MAX_LANES * 2];
-    if (count > MAX_LANES * 2) count = MAX_LANES * 2;
-    ZeroMemory(inputs, sizeof(INPUT) * count);
-    for (int i = 0; i < count; i++) {
-        inputs[i].type = INPUT_KEYBOARD;
-        inputs[i].ki.wVk = vks[i];
-        inputs[i].ki.wScan = (WORD)MapVirtualKeyA(vks[i], MAPVK_VK_TO_VSC);
-        inputs[i].ki.dwFlags = downs[i] ? 0 : KEYEVENTF_KEYUP;
-        if (vks[i] == VK_LEFT || vks[i] == VK_RIGHT || vks[i] == VK_UP || vks[i] == VK_DOWN ||
-            vks[i] == VK_INSERT || vks[i] == VK_DELETE || vks[i] == VK_HOME || vks[i] == VK_END ||
-            vks[i] == VK_PRIOR || vks[i] == VK_NEXT || vks[i] == VK_RCONTROL || vks[i] == VK_RMENU) {
-            inputs[i].ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
-        }
-    }
-    SendInput(count, inputs, sizeof(INPUT));
-}
-
+// Low-level fast keyboard input via SendInput
 static inline void send_key_event(WORD vk, bool down) {
-    send_key_batch(&vk, &down, 1);
+    INPUT input;
+    ZeroMemory(&input, sizeof(INPUT));
+    input.type = INPUT_KEYBOARD;
+    input.ki.wVk = vk;
+    input.ki.wScan = (WORD)MapVirtualKeyA(vk, MAPVK_VK_TO_VSC);
+    input.ki.dwFlags = down ? 0 : KEYEVENTF_KEYUP;
+    SendInput(1, &input, sizeof(INPUT));
 }
 
 typedef struct {
@@ -285,57 +274,68 @@ typedef struct {
 
 #define MAX_DELAYED_EVENTS 1024
 static DelayedKeyEvent g_delayed_queue[MAX_DELAYED_EVENTS];
-static int g_queue_head = 0;
-static int g_queue_tail = 0;
+static int g_delayed_count = 0;
 
 static inline void queue_delayed_event(LONGLONG due_tick, WORD vk, bool down) {
-    int next_tail = (g_queue_tail + 1) % MAX_DELAYED_EVENTS;
-    if (next_tail != g_queue_head) {
-        g_delayed_queue[g_queue_tail].due_tick = due_tick;
-        g_delayed_queue[g_queue_tail].vk = vk;
-        g_delayed_queue[g_queue_tail].down = down;
-        g_queue_tail = next_tail;
+    if (g_delayed_count >= MAX_DELAYED_EVENTS) return;
+    int i = g_delayed_count++;
+    while (i > 0) {
+        int parent = (i - 1) / 2;
+        if (g_delayed_queue[parent].due_tick <= due_tick) break;
+        g_delayed_queue[i] = g_delayed_queue[parent];
+        i = parent;
     }
+    g_delayed_queue[i].due_tick = due_tick;
+    g_delayed_queue[i].vk = vk;
+    g_delayed_queue[i].down = down;
 }
 
 static inline void process_delayed_events(LONGLONG current_tick) {
-    WORD batch_vks[MAX_LANES * 2];
-    bool batch_downs[MAX_LANES * 2];
+    INPUT batch_inputs[64];
     int batch_count = 0;
+    while (g_delayed_count > 0 && current_tick >= g_delayed_queue[0].due_tick) {
+        WORD vk = g_delayed_queue[0].vk;
+        bool down = g_delayed_queue[0].down;
 
-    while (g_queue_head != g_queue_tail) {
-        if (current_tick >= g_delayed_queue[g_queue_head].due_tick) {
-            batch_vks[batch_count] = g_delayed_queue[g_queue_head].vk;
-            batch_downs[batch_count] = g_delayed_queue[g_queue_head].down;
-            batch_count++;
-            g_queue_head = (g_queue_head + 1) % MAX_DELAYED_EVENTS;
-            if (batch_count >= MAX_LANES * 2) {
-                send_key_batch(batch_vks, batch_downs, batch_count);
-                batch_count = 0;
+        // Pop min element from heap
+        DelayedKeyEvent last = g_delayed_queue[--g_delayed_count];
+        if (g_delayed_count > 0) {
+            int i = 0;
+            while (i * 2 + 1 < g_delayed_count) {
+                int left = i * 2 + 1;
+                int right = left + 1;
+                int best = left;
+                if (right < g_delayed_count && g_delayed_queue[right].due_tick < g_delayed_queue[left].due_tick) {
+                    best = right;
+                }
+                if (last.due_tick <= g_delayed_queue[best].due_tick) break;
+                g_delayed_queue[i] = g_delayed_queue[best];
+                i = best;
             }
-        } else {
-            break;
+            g_delayed_queue[i] = last;
+        }
+
+        if (batch_count < 64) {
+            batch_inputs[batch_count].type = INPUT_KEYBOARD;
+            batch_inputs[batch_count].ki.wVk = vk;
+            batch_inputs[batch_count].ki.wScan = (WORD)MapVirtualKeyA(vk, MAPVK_VK_TO_VSC);
+            batch_inputs[batch_count].ki.dwFlags = (down ? 0 : KEYEVENTF_KEYUP);
+            batch_inputs[batch_count].ki.time = 0;
+            batch_inputs[batch_count].ki.dwExtraInfo = 0;
+            batch_count++;
         }
     }
     if (batch_count > 0) {
-        send_key_batch(batch_vks, batch_downs, batch_count);
+        SendInput((UINT)batch_count, batch_inputs, sizeof(INPUT));
     }
 }
 
 void release_all_keys(AppConfig* cfg) {
-    WORD batch_vks[MAX_LANES];
-    bool batch_downs[MAX_LANES];
-    int count = 0;
     for (int i = 0; i < cfg->lane_count; i++) {
         if (cfg->lanes[i].is_pressed) {
-            batch_vks[count] = cfg->lanes[i].vk;
-            batch_downs[count] = false;
-            count++;
+            send_key_event(cfg->lanes[i].vk, false);
             cfg->lanes[i].is_pressed = false;
         }
-    }
-    if (count > 0) {
-        send_key_batch(batch_vks, batch_downs, count);
     }
 }
 
@@ -421,13 +421,14 @@ void save_screenshot_bmp(const CaptureContext* ctx, const char* filename) {
 // Interactive Console Menu
 void print_menu(const AppConfig* cfg) {
     printf("\n=================================================================\n");
-    printf("         MANIA PLAYER - C NATIVE HIGH-PERFORMANCE ENGINE\n");
+    printf("         OSU!MANIA PLAYER V1.2.3 - NATIVE C ENGINE\n");
     printf("=================================================================\n");
     printf("  BBox Detection:   (%d, %d, %d, %d) [Width: %d, Height: %d]\n",
         cfg->bbox_left, cfg->bbox_top, cfg->bbox_right, cfg->bbox_bottom,
         cfg->bbox_right - cfg->bbox_left, cfg->bbox_bottom - cfg->bbox_top);
     printf("  Judgement Line:   Y = %d\n", cfg->judgement_line);
     printf("  Input Delay:      %d ms\n", cfg->input_delay_ms);
+    printf("  Skill Level:      %d ms (Variance: ±%d ms)\n", cfg->skill_level, cfg->skill_level);
     printf("  Input Mode:       %s\n", _stricmp(cfg->input_mode, "hold") == 0 ? "HOLD (Default)" : "TAP");
     printf("  Lanes (%d):\n", cfg->lane_count);
     for (int i = 0; i < cfg->lane_count; i++) {
@@ -440,10 +441,11 @@ void print_menu(const AppConfig* cfg) {
     printf("  [3] Edit Detection BBox\n");
     printf("  [4] Change Global Threshold\n");
     printf("  [5] Change Input Delay (ms)\n");
-    printf("  [6] Toggle Input Mode (Hold vs Tap)\n");
-    printf("  [7] Reset to Default WhiteCat 23-Speed Preset\n");
-    printf("  [8] Save Configuration to %s\n", CONFIG_FILE);
-    printf("  [9] / [Q] Exit\n");
+    printf("  [6] Change Skill Level Variance (±ms)\n");
+    printf("  [7] Toggle Input Mode (Hold vs Tap)\n");
+    printf("  [8] Reset to Default WhiteCat 23-Speed Preset\n");
+    printf("  [9] Save Configuration to %s\n", CONFIG_FILE);
+    printf("  [0] / [Q] Exit\n");
     printf("=================================================================\n");
     printf("Select option (or press Enter to start): ");
 }
@@ -561,7 +563,7 @@ void run_player(AppConfig* cfg) {
     }
 
     printf("\n=================================================================\n");
-    printf("         MANIA PLAYER (NATIVE C) - RUNNING\n");
+    printf("         OSU!MANIA PLAYER V1.2.3 (NATIVE C) - RUNNING\n");
     printf("  Controls:\n");
     printf("    [F] Start / Play\n");
     printf("    [S] Stop / Pause\n");
@@ -581,25 +583,36 @@ void run_player(AppConfig* cfg) {
     if (line_y < 0) line_y = 0;
 
     int width = ctx.width;
-    unsigned char* pBits = (unsigned char*)ctx.pBits;
+    const uint32_t* pPixels = (const uint32_t*)ctx.pBits;
 
-    LONGLONG delay_ticks = 0;
-    if (cfg->input_delay_ms > 0) {
-        delay_ticks = (freq.QuadPart * cfg->input_delay_ms) / 1000;
-    }
-    g_queue_head = 0;
-    g_queue_tail = 0;
-
+    int lane_pixel_idx[MAX_LANES];
     int thresh_sums[MAX_LANES];
+    WORD lane_vks[MAX_LANES];
+    LONGLONG lane_hold_ticks[MAX_LANES];
+    bool lane_valid[MAX_LANES];
+
     for (int i = 0; i < cfg->lane_count; i++) {
-        thresh_sums[i] = cfg->lanes[i].threshold * 3;
+        int lx = cfg->lanes[i].x;
+        if (lx >= 0 && lx < width && line_y >= 0 && line_y < ctx.height) {
+            lane_pixel_idx[i] = line_y * width + lx;
+            thresh_sums[i] = cfg->lanes[i].threshold * 3;
+            lane_vks[i] = cfg->lanes[i].vk;
+            lane_valid[i] = true;
+        } else {
+            lane_pixel_idx[i] = -1;
+            lane_valid[i] = false;
+        }
+        lane_hold_ticks[i] = 0;
     }
+
+    g_delayed_count = 0;
+    bool has_delay_or_skill = (cfg->input_delay_ms > 0 || cfg->skill_level > 0);
 
     while (g_program_active) {
         // Hotkey polling via GetAsyncKeyState
         if (GetAsyncKeyState('F') & 0x8000) {
             if (!g_is_running) {
-                printf("\n[>> START] Mania Player active! Monitoring lanes...\n");
+                printf("\n[>> START] Mania Player active! Monitoring %d lanes...\n", cfg->lane_count);
                 g_is_running = true;
             }
             Sleep(150); // Debounce hotkey
@@ -608,8 +621,7 @@ void run_player(AppConfig* cfg) {
             if (g_is_running) {
                 printf("\n[|| STOP] Mania Player paused.\n");
                 g_is_running = false;
-                g_queue_head = 0;
-                g_queue_tail = 0;
+                g_delayed_count = 0;
                 release_all_keys(cfg);
             }
             Sleep(150);
@@ -622,8 +634,7 @@ void run_player(AppConfig* cfg) {
         if (GetAsyncKeyState('M') & 0x8000) {
             printf("\n[Menu] Returning to Configuration Menu...\n");
             g_is_running = false;
-            g_queue_head = 0;
-            g_queue_tail = 0;
+            g_delayed_count = 0;
             release_all_keys(cfg);
             Sleep(250);
             break;
@@ -632,8 +643,7 @@ void run_player(AppConfig* cfg) {
             printf("\n[XX EXIT] Exiting Mania Player...\n");
             g_is_running = false;
             g_program_active = false;
-            g_queue_head = 0;
-            g_queue_tail = 0;
+            g_delayed_count = 0;
             release_all_keys(cfg);
             break;
         }
@@ -645,7 +655,7 @@ void run_player(AppConfig* cfg) {
 
         // Process due delayed events before screen capture
         QueryPerformanceCounter(&t_now);
-        if (delay_ticks > 0) {
+        if (has_delay_or_skill) {
             process_delayed_events(t_now.QuadPart);
         }
 
@@ -653,89 +663,128 @@ void run_player(AppConfig* cfg) {
         BitBlt(ctx.hMemDC, 0, 0, width, ctx.height, ctx.hScreenDC, cfg->bbox_left, cfg->bbox_top, SRCCOPY);
 
         QueryPerformanceCounter(&t_now);
-        if (delay_ticks > 0) {
+        if (has_delay_or_skill) {
             process_delayed_events(t_now.QuadPart);
         }
 
-        // 2. Direct memory pixel inspection with multi-pixel neighborhood probe
-        WORD batch_vks[MAX_LANES * 2];
-        bool batch_downs[MAX_LANES * 2];
-        int batch_count = 0;
-        LONGLONG tap_hold_ticks = (freq.QuadPart * 12) / 1000; // 12ms minimum hold for debounced tap
+        // 2. Direct 32-bit aligned memory pixel inspection with batch SendInput
+        INPUT frame_inputs[MAX_LANES * 2];
+        int frame_batch_count = 0;
 
         for (int i = 0; i < cfg->lane_count; i++) {
-            int x = cfg->lanes[i].x;
-            if (x < 0 || x >= width) continue;
+            if (!lane_valid[i]) continue;
 
-            int offset = (line_y * width + x) * 4;
-            int max_val = pBits[offset] + pBits[offset + 1] + pBits[offset + 2];
-
-            // Sample adjacent horizontal pixels to prevent misses on narrow lanes or subpixel anti-aliasing
-            if (x > 0) {
-                int off_l = offset - 4;
-                int val_l = pBits[off_l] + pBits[off_l + 1] + pBits[off_l + 2];
-                if (val_l > max_val) max_val = val_l;
-            }
-            if (x < width - 1) {
-                int off_r = offset + 4;
-                int val_r = pBits[off_r] + pBits[off_r + 1] + pBits[off_r + 2];
-                if (val_r > max_val) max_val = val_r;
-            }
-            // Vertical check if detection strip has height > 1
-            if (line_y + 1 < ctx.height) {
-                int off_d = ((line_y + 1) * width + x) * 4;
-                int val_d = pBits[off_d] + pBits[off_d + 1] + pBits[off_d + 2];
-                if (val_d > max_val) max_val = val_d;
-            }
-
-            bool is_active = (max_val > thresh_sums[i]);
+            uint32_t px = pPixels[lane_pixel_idx[i]];
+            int sum_bgr = (px & 0xFF) + ((px >> 8) & 0xFF) + ((px >> 16) & 0xFF);
+            bool is_active = (sum_bgr > thresh_sums[i]);
             bool was_active = cfg->lanes[i].is_pressed;
 
             if (hold_mode) {
                 if (is_active && !was_active) {
-                    if (delay_ticks > 0) {
-                        queue_delayed_event(t_now.QuadPart + delay_ticks, cfg->lanes[i].vk, true);
+                    if (has_delay_or_skill) {
+                        int var_ms = 0;
+                        if (cfg->skill_level > 0) {
+                            int range = (cfg->skill_level * 2) + 1;
+                            var_ms = (rand() % range) - cfg->skill_level;
+                        }
+                        int eff_delay_ms = cfg->input_delay_ms + var_ms;
+                        if (eff_delay_ms < 0) eff_delay_ms = 0;
+                        LONGLONG eff_ticks = ((LONGLONG)eff_delay_ms * freq.QuadPart) / 1000;
+                        lane_hold_ticks[i] = eff_ticks;
+
+                        if (eff_ticks > 0) {
+                            queue_delayed_event(t_now.QuadPart + eff_ticks, lane_vks[i], true);
+                        } else {
+                            frame_inputs[frame_batch_count].type = INPUT_KEYBOARD;
+                            frame_inputs[frame_batch_count].ki.wVk = lane_vks[i];
+                            frame_inputs[frame_batch_count].ki.wScan = (WORD)MapVirtualKeyA(lane_vks[i], MAPVK_VK_TO_VSC);
+                            frame_inputs[frame_batch_count].ki.dwFlags = 0;
+                            frame_inputs[frame_batch_count].ki.time = 0;
+                            frame_inputs[frame_batch_count].ki.dwExtraInfo = 0;
+                            frame_batch_count++;
+                        }
                     } else {
-                        batch_vks[batch_count] = cfg->lanes[i].vk;
-                        batch_downs[batch_count] = true;
-                        batch_count++;
+                        frame_inputs[frame_batch_count].type = INPUT_KEYBOARD;
+                        frame_inputs[frame_batch_count].ki.wVk = lane_vks[i];
+                        frame_inputs[frame_batch_count].ki.wScan = (WORD)MapVirtualKeyA(lane_vks[i], MAPVK_VK_TO_VSC);
+                        frame_inputs[frame_batch_count].ki.dwFlags = 0;
+                        frame_inputs[frame_batch_count].ki.time = 0;
+                        frame_inputs[frame_batch_count].ki.dwExtraInfo = 0;
+                        frame_batch_count++;
                     }
                     cfg->lanes[i].is_pressed = true;
                 } else if (!is_active && was_active) {
-                    if (delay_ticks > 0) {
-                        queue_delayed_event(t_now.QuadPart + delay_ticks, cfg->lanes[i].vk, false);
+                    if (has_delay_or_skill) {
+                        LONGLONG eff_ticks = lane_hold_ticks[i];
+                        if (eff_ticks > 0) {
+                            queue_delayed_event(t_now.QuadPart + eff_ticks, lane_vks[i], false);
+                        } else {
+                            frame_inputs[frame_batch_count].type = INPUT_KEYBOARD;
+                            frame_inputs[frame_batch_count].ki.wVk = lane_vks[i];
+                            frame_inputs[frame_batch_count].ki.wScan = (WORD)MapVirtualKeyA(lane_vks[i], MAPVK_VK_TO_VSC);
+                            frame_inputs[frame_batch_count].ki.dwFlags = KEYEVENTF_KEYUP;
+                            frame_inputs[frame_batch_count].ki.time = 0;
+                            frame_inputs[frame_batch_count].ki.dwExtraInfo = 0;
+                            frame_batch_count++;
+                        }
                     } else {
-                        batch_vks[batch_count] = cfg->lanes[i].vk;
-                        batch_downs[batch_count] = false;
-                        batch_count++;
+                        frame_inputs[frame_batch_count].type = INPUT_KEYBOARD;
+                        frame_inputs[frame_batch_count].ki.wVk = lane_vks[i];
+                        frame_inputs[frame_batch_count].ki.wScan = (WORD)MapVirtualKeyA(lane_vks[i], MAPVK_VK_TO_VSC);
+                        frame_inputs[frame_batch_count].ki.dwFlags = KEYEVENTF_KEYUP;
+                        frame_inputs[frame_batch_count].ki.time = 0;
+                        frame_inputs[frame_batch_count].ki.dwExtraInfo = 0;
+                        frame_batch_count++;
                     }
                     cfg->lanes[i].is_pressed = false;
                 }
-            } else { // Tap mode (debounced)
+            } else { // Tap mode
                 if (is_active && !was_active) {
-                    if (delay_ticks > 0) {
-                        queue_delayed_event(t_now.QuadPart + delay_ticks, cfg->lanes[i].vk, true);
-                        queue_delayed_event(t_now.QuadPart + delay_ticks + tap_hold_ticks, cfg->lanes[i].vk, false);
+                    if (has_delay_or_skill) {
+                        int var_ms = 0;
+                        if (cfg->skill_level > 0) {
+                            int range = (cfg->skill_level * 2) + 1;
+                            var_ms = (rand() % range) - cfg->skill_level;
+                        }
+                        int eff_delay_ms = cfg->input_delay_ms + var_ms;
+                        if (eff_delay_ms < 0) eff_delay_ms = 0;
+                        LONGLONG eff_ticks = ((LONGLONG)eff_delay_ms * freq.QuadPart) / 1000;
+                        LONGLONG tap_up_ticks = eff_ticks + ((LONGLONG)20 * freq.QuadPart / 1000);
+
+                        if (eff_ticks > 0) {
+                            queue_delayed_event(t_now.QuadPart + eff_ticks, lane_vks[i], true);
+                            queue_delayed_event(t_now.QuadPart + tap_up_ticks, lane_vks[i], false);
+                        } else {
+                            frame_inputs[frame_batch_count].type = INPUT_KEYBOARD;
+                            frame_inputs[frame_batch_count].ki.wVk = lane_vks[i];
+                            frame_inputs[frame_batch_count].ki.wScan = (WORD)MapVirtualKeyA(lane_vks[i], MAPVK_VK_TO_VSC);
+                            frame_inputs[frame_batch_count].ki.dwFlags = 0;
+                            frame_inputs[frame_batch_count].ki.time = 0;
+                            frame_inputs[frame_batch_count].ki.dwExtraInfo = 0;
+                            frame_batch_count++;
+
+                            queue_delayed_event(t_now.QuadPart + ((LONGLONG)20 * freq.QuadPart / 1000), lane_vks[i], false);
+                        }
                     } else {
-                        batch_vks[batch_count] = cfg->lanes[i].vk;
-                        batch_downs[batch_count] = true;
-                        batch_count++;
+                        frame_inputs[frame_batch_count].type = INPUT_KEYBOARD;
+                        frame_inputs[frame_batch_count].ki.wVk = lane_vks[i];
+                        frame_inputs[frame_batch_count].ki.wScan = (WORD)MapVirtualKeyA(lane_vks[i], MAPVK_VK_TO_VSC);
+                        frame_inputs[frame_batch_count].ki.dwFlags = 0;
+                        frame_inputs[frame_batch_count].ki.time = 0;
+                        frame_inputs[frame_batch_count].ki.dwExtraInfo = 0;
+                        frame_batch_count++;
+
+                        queue_delayed_event(t_now.QuadPart + ((LONGLONG)20 * freq.QuadPart / 1000), lane_vks[i], false);
                     }
                     cfg->lanes[i].is_pressed = true;
                 } else if (!is_active && was_active) {
-                    if (delay_ticks == 0) {
-                        batch_vks[batch_count] = cfg->lanes[i].vk;
-                        batch_downs[batch_count] = false;
-                        batch_count++;
-                    }
                     cfg->lanes[i].is_pressed = false;
                 }
             }
         }
 
-        // Atomically dispatch all concurrent key events in this frame!
-        if (batch_count > 0) {
-            send_key_batch(batch_vks, batch_downs, batch_count);
+        if (frame_batch_count > 0) {
+            SendInput((UINT)frame_batch_count, frame_inputs, sizeof(INPUT));
         }
 
         frame_count++;
@@ -746,25 +795,22 @@ void run_player(AppConfig* cfg) {
         if (elapsed_sec >= 2.0) {
             double fps = (double)frame_count / elapsed_sec;
             double latency_ms = (elapsed_sec / (double)frame_count) * 1000.0;
-            if (cfg->input_delay_ms > 0) {
-                printf("\r[Native C Active] FPS: %6.1f | Latency: %5.2f ms | Delay: %d ms | Lanes: %d", fps, latency_ms, cfg->input_delay_ms, cfg->lane_count);
-            } else {
-                printf("\r[Native C Active] FPS: %6.1f | Frame Latency: %5.2f ms | Lanes: %d", fps, latency_ms, cfg->lane_count);
-            }
+            printf("\r[Native C Active] FPS: %6.1f | Latency: %5.2f ms | Delay: %d ms | Skill: ±%d ms | Lanes: %d   ",
+                fps, latency_ms, cfg->input_delay_ms, cfg->skill_level, cfg->lane_count);
             fflush(stdout);
             frame_count = 0;
             t_start = t_now;
         }
     }
 
-    g_queue_head = 0;
-    g_queue_tail = 0;
+    g_delayed_count = 0;
 
     release_all_keys(cfg);
     cleanup_capture(&ctx);
 }
 
 int main() {
+    SetConsoleTitleA("Osu!Mania Player v1.2.3");
     CreateDirectoryA("presets", NULL);
     CreateDirectoryA("backups", NULL);
     timeBeginPeriod(1);
@@ -801,21 +847,30 @@ int main() {
                 g_config.input_delay_ms = d;
                 printf("[Updated] Input delay set to %d ms\n", g_config.input_delay_ms);
             }
-        } else if (choice == '6') {
+        } else if (choice == '6' || choice == 'k' || choice == 'K' || choice == 's' || choice == 'S') {
+            printf("Enter skill level variance in milliseconds (0-500) [±%d ms]: ", g_config.skill_level);
+            if (fgets(line, sizeof(line), stdin) && line[0] != '\n') {
+                int sk = atoi(line);
+                if (sk < 0) sk = 0;
+                if (sk > 500) sk = 500;
+                g_config.skill_level = sk;
+                printf("[Updated] Skill level set to ±%d ms variance\n", g_config.skill_level);
+            }
+        } else if (choice == '7') {
             if (_stricmp(g_config.input_mode, "hold") == 0) {
                 strcpy(g_config.input_mode, "tap");
             } else {
                 strcpy(g_config.input_mode, "hold");
             }
             printf("[Updated] Mode toggled to: %s\n", g_config.input_mode);
-        } else if (choice == '7') {
+        } else if (choice == '8') {
             set_default_config(&g_config);
             save_config_file(&g_config, CONFIG_FILE);
             printf("[Reset] Restored default WhiteCat 23-speed preset.\n");
-        } else if (choice == '8') {
+        } else if (choice == '9') {
             save_config_file(&g_config, CONFIG_FILE);
             printf("[Saved] Saved settings to %s\n", CONFIG_FILE);
-        } else if (choice == '9' || choice == 'q' || choice == 'Q') {
+        } else if (choice == '0' || choice == 'q' || choice == 'Q') {
             printf("\nExiting Mania Player. Goodbye!\n");
             break;
         } else {

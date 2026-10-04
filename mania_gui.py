@@ -7,6 +7,8 @@ import os
 import sys
 import time
 import json
+import random
+import heapq
 import collections
 import importlib.util
 import threading
@@ -45,95 +47,16 @@ if sys.platform == "win32":
         pass
 
 
-KEY_ALIASES = {
-    "semicolon": ";",
-    "bracketleft": "[",
-    "bracketright": "]",
-    "quote": "'",
-    "comma": ",",
-    "period": ".",
-    "slash": "/",
-    "backslash": "\\",
-    "minus": "-",
-    "equal": "=",
-    "equals": "=",
-    "capslock": "caps_lock",
-    "escape": "esc",
-}
-
-try:
-    if sys.platform == "win32":
-        import pynput.keyboard._win32 as _pynput_win32
-        import ctypes
-        _HAS_WIN32_BATCH = True
-    else:
-        _HAS_WIN32_BATCH = False
-except Exception:
-    _HAS_WIN32_BATCH = False
-
-
-class FastKeyBinder:
-    """High-performance atomic input injector that pre-resolves keys and batches concurrent chords in a single OS call."""
-    def __init__(self, controller, parsed_keys):
-        self.controller = controller
-        self.keys = list(parsed_keys)
-        self.fast_down = []
-        self.fast_up = []
-        self.can_batch = _HAS_WIN32_BATCH
-        if self.can_batch:
-            try:
-                for k in self.keys:
-                    res = controller._resolve(k)
-                    p_down = res._parameters(True)
-                    p_up = res._parameters(False)
-                    self.fast_down.append(_pynput_win32.KEYBDINPUT(**p_down))
-                    self.fast_up.append(_pynput_win32.KEYBDINPUT(**p_up))
-            except Exception:
-                self.can_batch = False
-
-    def send_batch(self, events):
-        """events is a list of (lane_index, is_down_bool)"""
-        if not events:
-            return
-        if self.can_batch:
-            try:
-                n = len(events)
-                arr = (_pynput_win32.INPUT * n)()
-                for i, (idx, is_down) in enumerate(events):
-                    arr[i].type = _pynput_win32.INPUT.KEYBOARD
-                    arr[i].value.ki = self.fast_down[idx] if is_down else self.fast_up[idx]
-                _pynput_win32.SendInput(n, arr, ctypes.sizeof(_pynput_win32.INPUT))
-                return
-            except Exception:
-                pass
-        # Fallback to standard pynput controller
-        for idx, is_down in events:
-            try:
-                k = self.keys[idx]
-                if is_down:
-                    self.controller.press(k)
-                else:
-                    self.controller.release(k)
-            except Exception:
-                pass
-
-    def release_all(self):
-        all_events = [(i, False) for i in range(len(self.keys))]
-        self.send_batch(all_events)
-
-
 def parse_key(key_val):
-    """Converts key string (e.g. 'q', 'space', 'left', 'up', 'bracketright') into pynput Key object or char."""
+    """Converts key string (e.g. 'q', 'space', 'left', 'up') into pynput Key object or char."""
     if not isinstance(key_val, str) or len(key_val) == 0:
         return key_val
+    if len(key_val) == 1:
+        return key_val
     normalized = key_val.lower().strip()
-    if normalized in KEY_ALIASES:
-        normalized = KEY_ALIASES[normalized]
-    if len(normalized) == 1:
-        return normalized
     if hasattr(Key, normalized):
         return getattr(Key, normalized)
-    return normalized
+    return key_val
 
 
 def get_base_dir() -> Path:
@@ -233,7 +156,7 @@ def get_harness_module():
 class ModernManiaApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("osu!mania Player Pro V1.0")
+        self.root.title("Osu!Mania Player v1.2.3")
         self.root.geometry("540x680")
         self.root.minsize(500, 620)
         self.root.configure(bg="#0f172a")
@@ -259,8 +182,9 @@ class ModernManiaApp:
         self.active_lanes = [39, 215, 353, 502]
         self.active_keys = ["q", "w", "[", "]"]
 
-        # Delay setting (milliseconds)
+        # Delay & Skill Level settings (milliseconds)
         self.input_delay_ms = 0
+        self.skill_level = 0
 
         # Load initial config from mania_config.json if available
         base_dir = get_base_dir()
@@ -275,6 +199,7 @@ class ModernManiaApp:
                     self.active_bbox = tuple(int(x) for x in c_bbox)
                 self.active_jl = int(cfg_data.get("judgement_line", self.active_jl))
                 self.input_delay_ms = int(cfg_data.get("input_delay_ms", cfg_data.get("delay_ms", 0)))
+                self.skill_level = int(cfg_data.get("skill_level", cfg_data.get("skill_level_ms", cfg_data.get("input_variance_ms", 0))))
                 c_lanes = cfg_data.get("lanes", [])
                 if c_lanes:
                     self.key_count = min(20, max(1, len(c_lanes)))
@@ -284,6 +209,7 @@ class ModernManiaApp:
                 pass
         else:
             self.input_delay_ms = int(getattr(maniaplayer, "INPUT_DELAY_MS", getattr(maniaplayer, "DELAY_MS", 0)))
+            self.skill_level = int(getattr(maniaplayer, "SKILL_LEVEL", getattr(maniaplayer, "SKILL_LEVEL_MS", 0)))
             if hasattr(maniaplayer, "LANES") and hasattr(maniaplayer, "KEYS"):
                 self.key_count = min(20, max(1, len(maniaplayer.LANES)))
                 self.active_lanes = list(maniaplayer.LANES[:self.key_count])
@@ -334,13 +260,13 @@ class ModernManiaApp:
         title_box.pack(side=tk.LEFT)
 
         lbl_title = tk.Label(
-            title_box, text="osu!mania Player Pro",
+            title_box, text="Osu!Mania Player v1.2.3",
             bg="#1e293b", fg="#f8fafc", font=("Segoe UI", 14, "bold")
         )
         lbl_title.pack(anchor="w")
 
         lbl_sub = tk.Label(
-            title_box, text="Ultra-Fast Screen Engine | V1.0 Standalone",
+            title_box, text="Ultra-Fast Screen Engine | v1.2.3 Standalone",
             bg="#1e293b", fg="#94a3b8", font=("Segoe UI", 8)
         )
         lbl_sub.pack(anchor="w")
@@ -617,6 +543,8 @@ class ModernManiaApp:
             cfg["judgement_line"] = self.active_jl
             cfg["input_delay_ms"] = self.input_delay_ms
             cfg["delay_ms"] = self.input_delay_ms
+            cfg["skill_level"] = self.skill_level
+            cfg["skill_level_ms"] = self.skill_level
             cfg["key_count"] = self.key_count
             cfg["lanes"] = [
                 {
@@ -635,6 +563,8 @@ class ModernManiaApp:
                 "judgement_line": self.active_jl,
                 "input_delay_ms": self.input_delay_ms,
                 "delay_ms": self.input_delay_ms,
+                "skill_level": self.skill_level,
+                "skill_level_ms": self.skill_level,
                 "global_threshold": 30,
                 "input_mode": "hold",
                 "lanes": cfg["lanes"]
@@ -653,6 +583,7 @@ class ModernManiaApp:
             jl = getattr(maniaplayer, "JUDGEMENENT_LINE", self.active_jl)
             self.active_bbox = bbox
             self.active_jl = jl
+            self.skill_level = int(getattr(maniaplayer, "SKILL_LEVEL", getattr(maniaplayer, "SKILL_LEVEL_MS", self.skill_level)))
 
         w = self.active_bbox[2] - self.active_bbox[0]
         h = self.active_bbox[3] - self.active_bbox[1]
@@ -667,7 +598,8 @@ class ModernManiaApp:
         self.lbl_cfg_lanes.config(text=lanes_str)
         self.lbl_cfg_jl.config(text=f"JUDGEMENENT_LINE: {self.active_jl}")
         if hasattr(self, "lbl_cfg_delay"):
-            self.lbl_cfg_delay.config(text=f"Input Delay: {self.input_delay_ms} ms")
+            skill_text = f" | Skill: ±{self.skill_level} ms" if self.skill_level > 0 else " | Skill: Off (0 ms)"
+            self.lbl_cfg_delay.config(text=f"Input Delay: {self.input_delay_ms} ms{skill_text}")
 
         for i in range(min(len(self.lane_pads), self.key_count)):
             self.lane_pads[i][2].config(text=self.active_keys[i].upper())
@@ -683,11 +615,13 @@ class ModernManiaApp:
         else:
             messagebox.showerror("Reload Failed", f"Could not load script:\n{load_error}")
 
-    def on_calibrator_update(self, bbox, judgement_line, lanes, keys=None, delay_ms=None):
-        """Callback invoked when Calibrator saves or applies new coordinates, keys, or delay."""
+    def on_calibrator_update(self, bbox, judgement_line, lanes, keys=None, delay_ms=None, skill_level=None):
+        """Callback invoked when Calibrator saves or applies new coordinates, keys, delay, or skill variance."""
         new_count = len(lanes)
         if delay_ms is not None:
             self.input_delay_ms = max(0, int(delay_ms))
+        if skill_level is not None:
+            self.skill_level = max(0, int(skill_level))
 
         if LOADED_MANIA and maniaplayer:
             try:
@@ -696,6 +630,8 @@ class ModernManiaApp:
                 maniaplayer.LANES = list(lanes)
                 maniaplayer.INPUT_DELAY_MS = self.input_delay_ms
                 maniaplayer.DELAY_MS = self.input_delay_ms
+                maniaplayer.SKILL_LEVEL = self.skill_level
+                maniaplayer.SKILL_LEVEL_MS = self.skill_level
                 if keys:
                     maniaplayer.KEYS = [str(k).lower() for k in keys]
                 for i in range(min(4, len(lanes))):
@@ -720,7 +656,8 @@ class ModernManiaApp:
 
         self.config_updated = True
         keys_str = "/".join(self.active_keys).upper()
-        self.lbl_status_sub.config(text=f"Updated: {self.key_count} Keys [{keys_str}] | Delay: {self.input_delay_ms}ms | BBOX {bbox}")
+        skill_str = f" | Skill: ±{self.skill_level}ms" if self.skill_level > 0 else ""
+        self.lbl_status_sub.config(text=f"Updated: {self.key_count} Keys [{keys_str}] | Delay: {self.input_delay_ms}ms{skill_str} | BBOX {bbox}")
 
 
     def open_calibrator(self):
@@ -828,32 +765,22 @@ class ModernManiaApp:
 
     def _bot_worker(self):
         """Ultra-fast capture worker achieving 60-240+ FPS with dynamic coordinate & key reloading (1-20 keys).
-        Fully optimized for atomic concurrent input batching (zero missed chord keys), multi-pixel lane sampling,
-        and high-precision input delay handling via collections.deque."""
+        Fully optimized for 7K-20K layouts: pre-packed lane records, binary min-heap for delay/jitter,
+        in-place visualizer buffer updates, and zero per-frame heap allocations."""
         jl = self.active_jl
         lanes = list(self.active_lanes)
         bbox = self.active_bbox
         num_lanes = len(lanes)
         keys = [parse_key(k) for k in self.active_keys[:num_lanes]]
-        key_binder = FastKeyBinder(self.keyboard, keys)
         pressed_states = [False] * num_lanes
         current_hits = [False] * num_lanes
-        delayed_events = collections.deque()
+        lane_hold_offsets = [0.0] * num_lanes
+        delayed_events = [] # Binary min-heap: (due_time, seq, action, key, lane_idx)
+        event_seq = 0
         delay_sec = max(0.0, float(self.input_delay_ms) / 1000.0)
+        skill_level = self.skill_level
+        has_delay_or_skill = (delay_sec > 0 or skill_level > 0)
         thresh_sums = tuple(90 for _ in range(num_lanes))
-
-        def calc_offsets(w, h, jl_val, lane_list):
-            jl_c = min(max(0, jl_val), h - 1)
-            st = w * 4
-            offs, offs_l, offs_r, offs_d = [], [], [], []
-            for lx in lane_list:
-                x = min(max(0, lx), w - 1)
-                base = (jl_c * st) + (x * 4)
-                offs.append(base)
-                offs_l.append(base - 4 if x > 0 else base)
-                offs_r.append(base + 4 if x < w - 1 else base)
-                offs_d.append(((jl_c + 1) * st) + (x * 4) if jl_c + 1 < h else base)
-            return offs, offs_l, offs_r, offs_d
 
         if HAS_MSS:
             try:
@@ -867,18 +794,27 @@ class ModernManiaApp:
                     }
                     w = monitor["width"]
                     h = monitor["height"]
-                    offsets, offsets_l, offsets_r, offsets_d = calc_offsets(w, h, jl, lanes)
+                    jl_clamp = min(max(0, jl), h - 1)
+                    stride = w * 4
+                    offsets = [(jl_clamp * stride) + (min(max(0, lx), w - 1) * 4) for lx in lanes]
+                    lane_records = tuple((offsets[i], thresh_sums[i], keys[i], i) for i in range(num_lanes))
 
                     while self.is_running and self.p_status:
-                        # Process due delayed events before grab
-                        if delay_sec > 0 and delayed_events:
+                        # Process due delayed events in exact chronological order before grab
+                        if has_delay_or_skill and delayed_events:
                             t_now = time.perf_counter()
-                            due_batch = []
                             while delayed_events and delayed_events[0][0] <= t_now:
-                                _, act, idx = delayed_events.popleft()
-                                due_batch.append((idx, act == 1))
-                            if due_batch:
-                                key_binder.send_batch(due_batch)
+                                _, _, act, k, _ = heapq.heappop(delayed_events)
+                                if act == 1:
+                                    try:
+                                        self.keyboard.press(k)
+                                    except Exception:
+                                        pass
+                                else:
+                                    try:
+                                        self.keyboard.release(k)
+                                    except Exception:
+                                        pass
 
                         # Check dynamic updates from calibrator or GUI
                         if self.config_updated or current_bbox != self.active_bbox:
@@ -888,11 +824,13 @@ class ModernManiaApp:
                             lanes = list(self.active_lanes)
                             num_lanes = len(lanes)
                             keys = [parse_key(k) for k in self.active_keys[:num_lanes]]
-                            key_binder = FastKeyBinder(self.keyboard, keys)
                             pressed_states = [False] * num_lanes
                             current_hits = [False] * num_lanes
+                            lane_hold_offsets = [0.0] * num_lanes
                             thresh_sums = tuple(90 for _ in range(num_lanes))
                             delay_sec = max(0.0, float(self.input_delay_ms) / 1000.0)
+                            skill_level = self.skill_level
+                            has_delay_or_skill = (delay_sec > 0 or skill_level > 0)
                             delayed_events.clear()
                             monitor = {
                                 "left": bbox[0],
@@ -902,7 +840,10 @@ class ModernManiaApp:
                             }
                             w = monitor["width"]
                             h = monitor["height"]
-                            offsets, offsets_l, offsets_r, offsets_d = calc_offsets(w, h, jl, lanes)
+                            jl_clamp = min(max(0, jl), h - 1)
+                            stride = w * 4
+                            offsets = [(jl_clamp * stride) + (min(max(0, lx), w - 1) * 4) for lx in lanes]
+                            lane_records = tuple((offsets[i], thresh_sums[i], keys[i], i) for i in range(num_lanes))
                             self.config_updated = False
 
                         shot = sct.grab(monitor)
@@ -910,55 +851,77 @@ class ModernManiaApp:
                         t_now = time.perf_counter()
 
                         # Process due delayed events immediately after grab
-                        if delay_sec > 0 and delayed_events:
-                            due_batch = []
+                        if has_delay_or_skill and delayed_events:
                             while delayed_events and delayed_events[0][0] <= t_now:
-                                _, act, idx = delayed_events.popleft()
-                                due_batch.append((idx, act == 1))
-                            if due_batch:
-                                key_binder.send_batch(due_batch)
+                                _, _, act, k, _ = heapq.heappop(delayed_events)
+                                if act == 1:
+                                    try:
+                                        self.keyboard.press(k)
+                                    except Exception:
+                                        pass
+                                else:
+                                    try:
+                                        self.keyboard.release(k)
+                                    except Exception:
+                                        pass
 
-                        instant_batch = []
-                        for i in range(num_lanes):
-                            off = offsets[i]
-                            val = raw[off] + raw[off + 1] + raw[off + 2]
-                            off_l = offsets_l[i]
-                            val_l = raw[off_l] + raw[off_l + 1] + raw[off_l + 2]
-                            if val_l > val: val = val_l
-                            off_r = offsets_r[i]
-                            val_r = raw[off_r] + raw[off_r + 1] + raw[off_r + 2]
-                            if val_r > val: val = val_r
-                            off_d = offsets_d[i]
-                            val_d = raw[off_d] + raw[off_d + 1] + raw[off_d + 2]
-                            if val_d > val: val = val_d
-
-                            hit = (val > thresh_sums[i])
+                        for off, th, k, i in lane_records:
+                            hit = (raw[off] + raw[off + 1] + raw[off + 2]) > th
                             current_hits[i] = hit
 
                             if hit:
                                 if not pressed_states[i]:
                                     pressed_states[i] = True
-                                    if delay_sec > 0:
-                                        delayed_events.append((t_now + delay_sec, 1, i))
+                                    if has_delay_or_skill:
+                                        var_sec = (random.uniform(-skill_level, skill_level) / 1000.0) if skill_level > 0 else 0.0
+                                        eff_delay = max(0.0, delay_sec + var_sec)
+                                        lane_hold_offsets[i] = eff_delay
+                                        if eff_delay > 0:
+                                            event_seq += 1
+                                            heapq.heappush(delayed_events, (t_now + eff_delay, event_seq, 1, k, i))
+                                        else:
+                                            try:
+                                                self.keyboard.press(k)
+                                            except Exception:
+                                                pass
                                     else:
-                                        instant_batch.append((i, True))
+                                        try:
+                                            self.keyboard.press(k)
+                                        except Exception:
+                                            pass
                             else:
                                 if pressed_states[i]:
                                     pressed_states[i] = False
-                                    if delay_sec > 0:
-                                        delayed_events.append((t_now + delay_sec, 0, i))
+                                    if has_delay_or_skill:
+                                        hold_offset = lane_hold_offsets[i]
+                                        if hold_offset > 0:
+                                            event_seq += 1
+                                            heapq.heappush(delayed_events, (t_now + hold_offset, event_seq, 0, k, i))
+                                        else:
+                                            try:
+                                                self.keyboard.release(k)
+                                            except Exception:
+                                                pass
                                     else:
-                                        instant_batch.append((i, False))
+                                        try:
+                                            self.keyboard.release(k)
+                                        except Exception:
+                                            pass
 
-                        if instant_batch:
-                            key_binder.send_batch(instant_batch)
-
-                        self.lane_states = list(current_hits)
+                        # In-place update: zero heap allocation per frame
+                        if len(self.lane_states) == num_lanes:
+                            self.lane_states[:] = current_hits
+                        else:
+                            self.lane_states = list(current_hits)
                         self.loop_count += 1
 
                     # Cleanup on stop
                     delayed_events.clear()
-                    key_binder.release_all()
+                    for k in keys:
+                        try:
+                            self.keyboard.release(k)
+                        except Exception:
+                            pass
                     return
             except Exception:
                 pass
@@ -972,22 +935,30 @@ class ModernManiaApp:
                     lanes = list(self.active_lanes)
                     num_lanes = len(lanes)
                     keys = [parse_key(k) for k in self.active_keys[:num_lanes]]
-                    key_binder = FastKeyBinder(self.keyboard, keys)
                     pressed_states = [False] * num_lanes
                     current_hits = [False] * num_lanes
+                    lane_hold_offsets = [0.0] * num_lanes
                     thresh_sums = tuple(90 for _ in range(num_lanes))
                     delay_sec = max(0.0, float(self.input_delay_ms) / 1000.0)
+                    skill_level = self.skill_level
+                    has_delay_or_skill = (delay_sec > 0 or skill_level > 0)
                     delayed_events.clear()
                     self.config_updated = False
 
                 t_now = time.perf_counter()
-                if delay_sec > 0 and delayed_events:
-                    due_batch = []
+                if has_delay_or_skill and delayed_events:
                     while delayed_events and delayed_events[0][0] <= t_now:
-                        _, act, idx = delayed_events.popleft()
-                        due_batch.append((idx, act == 1))
-                    if due_batch:
-                        key_binder.send_batch(due_batch)
+                        _, _, act, k, _ = heapq.heappop(delayed_events)
+                        if act == 1:
+                            try:
+                                self.keyboard.press(k)
+                            except Exception:
+                                pass
+                        else:
+                            try:
+                                self.keyboard.release(k)
+                            except Exception:
+                                pass
 
                 check = ImageGrab.grab(bbox=bbox)
                 px = check.load()
@@ -997,49 +968,66 @@ class ModernManiaApp:
                 h = max(1, bbox[3] - bbox[1])
                 jl_clamp = min(max(0, jl), h - 1)
 
-                instant_batch = []
                 for i in range(num_lanes):
                     lx = min(max(0, lanes[i]), w - 1)
-                    val = sum(px[lx, jl_clamp][:3])
-                    if lx > 0:
-                        val_l = sum(px[lx - 1, jl_clamp][:3])
-                        if val_l > val: val = val_l
-                    if lx < w - 1:
-                        val_r = sum(px[lx + 1, jl_clamp][:3])
-                        if val_r > val: val = val_r
-                    if jl_clamp + 1 < h:
-                        val_d = sum(px[lx, jl_clamp + 1][:3])
-                        if val_d > val: val = val_d
-
-                    hit = (val > thresh_sums[i])
+                    hit = sum(px[lx, jl_clamp][:3]) > thresh_sums[i]
                     current_hits[i] = hit
+                    k = keys[i]
 
                     if hit:
                         if not pressed_states[i]:
                             pressed_states[i] = True
-                            if delay_sec > 0:
-                                delayed_events.append((t_now + delay_sec, 1, i))
+                            if has_delay_or_skill:
+                                var_sec = (random.uniform(-skill_level, skill_level) / 1000.0) if skill_level > 0 else 0.0
+                                eff_delay = max(0.0, delay_sec + var_sec)
+                                lane_hold_offsets[i] = eff_delay
+                                if eff_delay > 0:
+                                    event_seq += 1
+                                    heapq.heappush(delayed_events, (t_now + eff_delay, event_seq, 1, k, i))
+                                else:
+                                    try:
+                                        self.keyboard.press(k)
+                                    except Exception:
+                                        pass
                             else:
-                                instant_batch.append((i, True))
+                                try:
+                                    self.keyboard.press(k)
+                                except Exception:
+                                    pass
                     else:
                         if pressed_states[i]:
                             pressed_states[i] = False
-                            if delay_sec > 0:
-                                delayed_events.append((t_now + delay_sec, 0, i))
+                            if has_delay_or_skill:
+                                hold_offset = lane_hold_offsets[i]
+                                if hold_offset > 0:
+                                    event_seq += 1
+                                    heapq.heappush(delayed_events, (t_now + hold_offset, event_seq, 0, k, i))
+                                else:
+                                    try:
+                                        self.keyboard.release(k)
+                                    except Exception:
+                                        pass
                             else:
-                                instant_batch.append((i, False))
+                                try:
+                                    self.keyboard.release(k)
+                                except Exception:
+                                    pass
 
-                if instant_batch:
-                    key_binder.send_batch(instant_batch)
-
-                self.lane_states = list(current_hits)
+                if len(self.lane_states) == num_lanes:
+                    self.lane_states[:] = current_hits
+                else:
+                    self.lane_states = list(current_hits)
                 self.loop_count += 1
             except Exception:
                 pass
 
         # Cleanup fallback
         delayed_events.clear()
-        key_binder.release_all()
+        for k in keys:
+            try:
+                self.keyboard.release(k)
+            except Exception:
+                pass
 
     # -------------------------------------------------------------
     # Global Hotkeys Listener (F1, F2, F4)
