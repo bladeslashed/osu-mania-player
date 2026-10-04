@@ -21,9 +21,9 @@ Designed with a dual-engine architecture: a modular **Python / MSS engine** for 
   - Packaged as a standalone Windows executable (`maniaplayer.exe`).
 - **Human-like Skill Simulation & Fatigue (Misread, Stamina, Strain)**:
   - **Skill Level Jitter**: Adds configurable uniform input variance from $\pm X\text{ ms}$ to mimic natural human finger inaccuracy.
-  - **Misread System**: Configurable chance ($X\%$) for a lane to miss-read notes, ignoring inputs on that lane for $Y\text{ ms}$.
+  - **Misread System**: Configurable chance ($X$%) for a lane to miss-read notes, ignoring inputs on that lane for $Y\text{ ms}$.
   - **Stamina Pool**: Configurable maximum clicks with continuous regeneration per 20ms. Inputs are ignored when empty.
-  - **Strain Dynamic Fatigue**: For every $X\%$ stamina lost, misread chance increases by $y\%$, skill jitter delay increases by $z\text{ ms}$, and stamina regeneration decreases by $Z\%$.
+  - **Strain Dynamic Fatigue**: For every $X$% stamina lost, misread chance increases by $y$%, skill jitter delay increases by $z\text{ ms}$, and stamina regeneration decreases by $Z$%.
   - **Decimal Precision**: Full support for decimal/float values across all stats (e.g. `2.5%` misread, `12.5%` strain steps, `1.25` regen/20ms) with clean rounded UI readouts.
 - **Interactive Visual Calibration Harness (`mania_harness.py`)**:
   - **BBOX Drag & Resize**: Visually position the playfield capture box with 1px snap helpers and fine Y-offset shifting.
@@ -204,7 +204,7 @@ To produce human-like, non-robotic gameplay, ManiaPlayer features a customizable
 - Example: With `skill_level = 5`, note presses naturally deviate between $-5\text{ ms}$ and $+5\text{ ms}$, simulating natural human finger inaccuracy.
 
 ### 2. Misread System (`misread_chance` & `misread_ms`)
-- **Chance ($X\%$)**: Probability that a note press on a lane is misread.
+- **Chance ($X$%)**: Probability that a note press on a lane is misread.
 - **Duration ($Y\text{ ms}$)**: Once a misread occurs, that specific lane ignores all incoming inputs for $Y$ milliseconds, simulating player sightread stutter or hesitation.
 
 ### 3. Stamina Pool (`stamina_max` & `stamina_regen`)
@@ -218,12 +218,12 @@ As stamina depletes during dense streams and chordjacks, player fatigue intensif
   $$\text{LostPct} = \max\left(0, \left(1.0 - \frac{\text{Stamina}}{\text{StaminaMax}}\right) \times 100\right)$$
   $$\text{Steps} = \left\lfloor \frac{\text{LostPct}}{\text{StrainStepPct}} \right\rfloor \quad (\text{when } \text{StrainStepPct} > 0)$$
 - **Additive Penalties**:
-  - **Misread Chance**: $\text{EffMisread} = \min\left(100\%, \text{BaseMisread} + (\text{Steps} \times \text{StrainMisreadPct})\right)$
+  - **Misread Chance**: $\text{EffMisread} = \min\left(100, \text{BaseMisread} + (\text{Steps} \times \text{StrainMisreadPct})\right)$
   - **Skill Jitter**: $\text{EffJitter} = \text{BaseSkillLevel} + (\text{Steps} \times \text{StrainSkillMs})\text{ ms}$
   - **Stamina Regen**: $\text{EffRegen} = \text{BaseRegen} \times \max\left(0.0, 1.0 - \frac{\text{Steps} \times \text{StrainRegenPct}}{100}\right)$
 
 ### 5. Live Skill & Stamina Monitor in GUI
-- **Live Stamina Gauge**: Numerical click readout and animated progress bar with dynamic color transitions (Green $> 50\%$, Amber $20\text{--}50\%$, Red $< 20\%$).
+- **Live Stamina Gauge**: Numerical click readout and animated progress bar with dynamic color transitions (Green > 50%, Amber 20–50%, Red < 20%).
 - **Live Regen Badge**: Real-time effective regeneration rate and active strain penalty percentage.
 - **Live Misread Badge**: Current effective misread chance and active strain bonus.
 - **Live Strain Status**: Real-time fatigue tier (`🔥 Tier 1 Active`, `Tier 2`, etc.) and distance to the next tier.
